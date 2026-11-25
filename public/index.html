@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Git Deploy</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-icon">↗</span><span>Git Deploy<small>WORKFLOW AUTOMATION</small></span></div>
+      <div class="nav-label">WORKSPACE</div>
+      <nav aria-label="Repository views">
+        <button class="nav active" data-filter="all"><span>▦</span> Repositories</button>
+        <button class="nav" data-filter="watching"><span>◉</span> Watching</button>
+        <button class="nav" data-filter="deployed"><span>◇</span> Deployed</button>
+        <button class="nav" data-filter="error"><span>△</span> Needs attention</button>
+      </nav>
+      <div class="sidebar-foot"><span class="pulse"></span> Your deployment workspace <button id="logout" class="link">Log out</button></div>
+    </aside>
+    <main>
+      <header class="topbar"><span>WORKSPACE <span class="crumb">/</span> <strong>OVERVIEW</strong></span><span class="top-status"><span class="pulse"></span> Local instance</span></header>
+      <div class="content">
+        <div class="heading">
+          <div><div class="eyebrow">YOUR WORKSPACE <span>✦</span></div><h1>Deployments<span>.</span></h1><p>Keep your projects moving, automatically.</p></div>
+          <button id="add-open" class="primary">＋ Add repository</button>
+        </div>
+        <div class="stats">
+          <div class="stat"><span>REPOSITORIES</span><strong id="total">—</strong><small>Connected projects</small><i>▦</i></div>
+          <div class="stat"><span>WATCHING</span><strong id="watching">—</strong><small>Monitoring changes</small><i>◉</i></div>
+          <div class="stat"><span>DEPLOYED</span><strong id="deployed">—</strong><small>Successful deployments</small><i>◇</i></div>
+          <div class="stat"><span>NEEDS ATTENTION</span><strong id="errors">—</strong><small>Check activity logs</small><i>△</i></div>
+        </div>
+        <div class="section-title"><div><h2 id="view-title">Repositories</h2><p>Your projects, all in one place.</p></div><span class="live"><span class="pulse"></span> LIVE UPDATES</span></div>
+        <div id="notice" role="status"></div>
+        <div id="repos" class="repo-list"></div>
+        <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW.</footer>
+      </div>
+    </main>
+  </div>
+  <dialog id="login-dialog">
+    <form id="login-form">
+      <div class="dialog-head"><div><div class="eyebrow">WELCOME BACK</div><h2>Unlock workspace</h2><p>Enter the deployment token configured on your server.</p></div></div>
+      <label for="token">Deployment token</label><input id="token" type="password" autocomplete="current-password" required>
+      <p class="hint">Your token stays in this browser session.</p>
+      <button class="primary wide" type="submit">Continue →</button><p id="login-error" class="error" role="alert"></p>
+    </form>
+  </dialog>
+  <dialog id="add-dialog">
+    <form id="add-form">
+      <div class="dialog-head"><div><div class="eyebrow">NEW PROJECT</div><h2>Add repository</h2><p>Connect a Git repository to your workspace.</p></div><button type="button" class="close" data-close="add-dialog" aria-label="Close">×</button></div>
+      <label for="url">Repository URL</label><input id="url" type="url" placeholder="https://github.com/you/project.git" required>
+      <label for="branch">Branch</label><input id="branch" value="main" required>
+      <label for="new-script">Custom script <span class="muted">(optional)</span></label><textarea id="new-script" rows="3" placeholder="e.g. npm run migrate"></textarea>
+      <p class="hint">Runs on the deployment host after Docker Compose starts. Only use trusted scripts.</p>
+      <button class="primary wide" type="submit">Clone repository →</button>
+    </form>
+  </dialog>
+  <dialog id="settings-dialog">
+    <form id="settings-form">
+      <div class="dialog-head"><div><div class="eyebrow">PROJECT SETTINGS</div><h2>Custom script</h2><p>Executed after Compose starts on each deployment.</p></div><button type="button" class="close" data-close="settings-dialog" aria-label="Close">×</button></div>
+      <label for="edit-script">Shell commands</label><textarea id="edit-script" rows="7"></textarea>
+      <p class="hint">Commands run with access to the deployment host. Only use trusted scripts.</p>
+      <button class="primary wide" type="submit">Save settings</button>
+    </form>
+  </dialog>
+  <dialog id="log-dialog">
+    <div class="dialog-head"><div><div class="eyebrow">DEPLOYMENT OUTPUT</div><h2>Activity log</h2><p id="log-title"></p></div><button type="button" class="close" data-close="log-dialog" aria-label="Close">×</button></div>
+    <pre id="log-content"></pre>
+  </dialog>
+</body>
+</html>
