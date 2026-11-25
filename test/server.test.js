@@ -32,6 +32,7 @@ case "$1" in
   clone) for last do :; done; mkdir -p "$last/.git"; cp "$FAKE_DIR/remote" "$last/.head";;
   pull) cp "$FAKE_DIR/remote" .head;;
   fetch) cp "$FAKE_DIR/remote" .fetch;;
+  merge-base) [ "$(cat .fetch)" != "rewound-commit" ];;
   rev-parse) if [ "$2" = HEAD ]; then cat .head; else cat .fetch; fi;;
   *) exit 1;;
 esac
@@ -103,6 +104,11 @@ esac
   repo = await current(id);
   assert.equal(repo.watching, false);
   assert.equal(repo.script, 'echo updated');
+  assert.equal((await request(`/api/repos/${id}`, 'PATCH', { watching: true })).status, 200);
+  fs.writeFileSync(path.join(dir, 'remote'), 'rewound-commit');
+  repo = await waitFor(async () => { const item = await current(id); return item.status === 'error' && item; }, 14000);
+  assert.match(repo.message, /not a fast-forward/);
+  assert.equal(repo.commit, 'second-commit');
   assert.equal((await request(`/api/repos/${id}`, 'DELETE')).status, 200);
   assert.equal((await request('/api/repos')).status, 200);
   assert.equal((await (await request('/api/repos')).json()).length, 0);

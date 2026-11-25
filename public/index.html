@@ -54,7 +54,7 @@
       <label for="url">Repository URL</label><input id="url" type="url" placeholder="https://github.com/you/project.git" required>
       <label for="branch">Branch</label><input id="branch" value="main" required>
       <label for="new-script">Custom script <span class="muted">(optional)</span></label><textarea id="new-script" rows="3" placeholder="e.g. npm run migrate"></textarea>
-      <p class="hint">Runs on the deployment host after Docker Compose starts. Only use trusted scripts.</p>
+      <p class="hint">Runs inside the Git Deploy runtime after Docker Compose starts. Only use trusted scripts.</p>
       <button class="primary wide" type="submit">Clone repository →</button>
     </form>
   </dialog>
@@ -62,7 +62,7 @@
     <form id="settings-form">
       <div class="dialog-head"><div><div class="eyebrow">PROJECT SETTINGS</div><h2>Custom script</h2><p>Executed after Compose starts on each deployment.</p></div><button type="button" class="close" data-close="settings-dialog" aria-label="Close">×</button></div>
       <label for="edit-script">Shell commands</label><textarea id="edit-script" rows="7"></textarea>
-      <p class="hint">Commands run with access to the deployment host. Only use trusted scripts.</p>
+      <p class="hint">Commands run with Docker host access. Only use trusted scripts.</p>
       <button class="primary wide" type="submit">Save settings</button>
     </form>
   </dialog>

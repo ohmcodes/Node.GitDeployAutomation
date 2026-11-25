@@ -107,6 +107,11 @@ function check(repo) {
     await run(repo, 'git', ['fetch', 'origin', repo.branch], cwd);
     const remote = await run(repo, 'git', ['rev-parse', 'FETCH_HEAD'], cwd);
     if (remote !== repo.commit) {
+      try {
+        await run(repo, 'git', ['merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD'], cwd);
+      } catch {
+        throw new Error('Remote branch is not a fast-forward; resolve it before deploying.');
+      }
       repo.status = 'deploying';
       save();
       await deployWork(repo);
