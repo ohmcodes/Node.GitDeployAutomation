@@ -1,0 +1,12 @@
+{
+  "name": "node-git-deploy-automation",
+  "version": "1.0.0",
+  "description": "A lightweight Git and Docker Compose deployment watcher",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
