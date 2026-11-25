@@ -79,6 +79,14 @@ esac
   }
   start();
   await waitFor(async () => (await fetch(base)).ok);
+  const malformedResponse = await new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => socket.write('GET http://[ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'));
+    let response = '';
+    socket.on('data', chunk => { response += chunk; });
+    socket.on('end', () => resolve(response));
+    socket.on('error', reject);
+  });
+  assert.match(malformedResponse, /^HTTP\/1\.1 400/);
   assert.equal((await request('/api/repos', 'GET', undefined, false)).status, 401);
   assert.equal((await request('/api/repos', 'POST', { url: '******example.com/repo.git' })).status, 400);
   assert.equal((await request('/api/repos', 'POST', { url: 'https://example.com/repo.git', branch: '../bad' })).status, 400);

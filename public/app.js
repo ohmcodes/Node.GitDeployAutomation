@@ -6,6 +6,7 @@ let repos = [];
 let filter = 'all';
 let selected = null;
 let refreshing = false;
+let session = 0;
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -88,12 +89,16 @@ function render() {
 async function refresh() {
   if (!token || refreshing) return;
   refreshing = true;
+  const currentSession = session;
   try {
-    repos = await api('/api/repos');
+    const result = await api('/api/repos');
+    if (session !== currentSession) return;
+    repos = result;
     render();
     notice('');
     return true;
   } catch (error) {
+    if (session !== currentSession) return;
     if (error.message === 'Unauthorized') {
       token = '';
       sessionStorage.removeItem('deployToken');
@@ -116,12 +121,14 @@ $('#login-form').addEventListener('submit', async event => {
   } else if (token) $('#login-error').textContent = 'Could not connect to the server. Please try again.';
 });
 $('#logout').addEventListener('click', () => {
+  session++;
   token = '';
   sessionStorage.removeItem('deployToken');
   repos = [];
   render();
   $('#login-dialog').showModal();
 });
+$('#login-dialog').addEventListener('cancel', event => event.preventDefault());
 $('#add-open').addEventListener('click', () => $('#add-dialog').showModal());
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 document.querySelectorAll('.nav').forEach(button => button.addEventListener('click', () => {

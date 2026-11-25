@@ -5,9 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
 
-const exec = promisify(execFile);
 const root = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const reposDir = path.join(root, 'repos');
 const stateFile = path.join(root, 'state.json');
@@ -43,12 +41,56 @@ function append(repo, text) {
   save();
 }
 
+function exec(program, args, options) {
+  return new Promise((resolve, reject) => {
+    let timedOut = false;
+    let escalated = false;
+    let pending;
+    const finish = (error, stdout, stderr) => {
+      if (timedOut && !escalated) {
+        pending = [error, stdout, stderr];
+        return;
+      }
+      if (timedOut && !error) error = new Error('Command timed out');
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    };
+    const child = execFile(program, args, { ...options, detached: process.platform !== 'win32' }, (error, stdout, stderr) => {
+      clearTimeout(timer);
+      if (error && error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') terminate('SIGKILL');
+      finish(error, stdout, stderr);
+    });
+    const terminate = signal => {
+      try {
+        if (process.platform === 'win32') child.kill(signal);
+        else if (child.pid) process.kill(-child.pid, signal);
+      } catch (error) {
+        if (error.code !== 'ESRCH') console.error(error);
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate('SIGTERM');
+      setTimeout(() => {
+        terminate('SIGKILL');
+        escalated = true;
+        if (pending) finish(...pending);
+      }, 1000).unref();
+    }, 15 * 60 * 1000);
+  });
+}
+
 async function run(repo, program, args, cwd) {
   append(repo, `\n$ ${program} ${args.join(' ')}\n`);
   try {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
     delete env.DEPLOY_TOKEN;
-    const result = await exec(program, args, { cwd, timeout: 15 * 60 * 1000, maxBuffer: 2 * 1024 * 1024, env });
+    const result = await exec(program, args, { cwd, maxBuffer: 2 * 1024 * 1024, env });
     append(repo, (result.stdout || '') + (result.stderr || ''));
     return result.stdout.trim();
   } catch (error) {
@@ -162,7 +204,12 @@ const assets = {
   '/style.css': ['style.css', 'text/css; charset=utf-8']
 };
 const server = http.createServer(async (req, res) => {
-  const pathname = new URL(req.url, 'http://localhost').pathname;
+  let pathname;
+  try {
+    pathname = new URL(req.url, 'http://localhost').pathname;
+  } catch {
+    return send(res, 400, { error: 'Invalid request URL' });
+  }
   if (req.method === 'GET' && assets[pathname]) {
     const [file, type] = assets[pathname];
     res.writeHead(200, {
