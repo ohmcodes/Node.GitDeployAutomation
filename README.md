@@ -6,12 +6,13 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 
 ## What it does
 
-- Dark-mode dashboard with repository, watching, deployed and error views.
+- Light and dark themes, repository filters and status colors, a developer guide, and a centralized activity feed.
 - Clone HTTPS or `ssh://` repositories, select a branch (default `main`), and manually deploy.
 - For a deployment, run `git pull --ff-only origin <branch>`, `docker compose up -d --build`, an optional custom shell script, `docker compose ps`, and `docker compose logs --tail=100` (all services).
 - Poll deployed repositories for changes, deploy fast-forward updates, and pause or resume watching. A repository is not automatically deployed until its first manual deployment succeeds.
-- Show the latest output, last successful commit and deployment time in the API, and persist state across restarts.
-- Remove a repository and its clone without stopping its containers.
+- Show Git Deploy process and configured Docker host summaries on the dashboard, per-container summaries on repository cards, and detailed bars for all three on the metrics page; persist deployment state and recent activity across restarts.
+- Use a managed HTTPS token or generate an SSH deploy key for a private repository.
+- Remove a repository and its clone, with optional Compose service and locally built image cleanup.
 
 ## Quick start
 
@@ -34,6 +35,7 @@ For running the application itself in Docker, private repositories, configuratio
 | `PORT` | `3000` | HTTP listen port. |
 | `DATA_DIR` | `./data` | Persistent state and repository clones. |
 | `POLL_INTERVAL_SECONDS` | `60` | Poll interval, integer of at least 10 seconds. |
+| `HOST_PROC_DIR` | unset | Path to the local Docker host's proc filesystem for host CPU and memory metrics; see deployment instructions. |
 
 Run the focused tests with `npm test`. They use temporary Git and Docker stand-ins and do not deploy containers.
 
@@ -43,7 +45,9 @@ Run the focused tests with `npm test`. They use temporary Git and Docker stand-i
 - Failed clones can be removed and re-added. A failed check or deployment stops automatic checks for that repository; inspect **Activity**, fix the cause, and deploy manually to resume. Interrupted operations are marked as errors on restart. A non-fast-forward remote change requires manual resolution.
 - The custom script runs via `sh -c` in the clone directory, **after** Compose starts. It runs in the Git Deploy container when installed with Docker, not directly on the host, so only tools installed in that runtime are available. A failure marks the deployment as failed, but does not roll back containers. Commands have a 15-minute timeout; scripts must not detach or background long-running processes. Project Compose files must be in the repository root.
 - The deployed count means a deployment previously succeeded, not that containers are currently healthy. This is not a full container management system or a substitute for backups and monitoring.
-- Output is capped to the most recent 40,000 characters per repository and persisted on disk. Logs and scripts may contain sensitive information; do not print secrets. There is no secret manager, multi-user access control, audit log, deployment queue, rollback, webhook, or container health monitoring yet.
+- Cards highlight rebuilding, paused, and recently pulled (60 seconds) states. The latest 200 activity chunks and the most recent 40,000 characters per repository are persisted; this feed is not a tamper-proof audit log.
+- Removal only runs Compose cleanup when explicitly selected; `docker compose down --rmi local` can affect other deployments sharing a project name or built image. Volumes are not deleted.
+- Managed tokens and unencrypted SSH private keys are stored in the protected data directory, not in a dedicated secret manager. Logs and scripts may contain sensitive information; do not print secrets. There is no multi-user access control, audit log, deployment queue, rollback, webhook, or container health monitoring yet.
 
 ## Suggested next steps
 

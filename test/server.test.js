@@ -6,12 +6,75 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
 
 const root = path.join(__dirname, '..');
 const token = 'example-test-password-only';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function makeStubs(bin) {
+  if (process.platform === 'win32') {
+    const source = path.join(bin, 'stub.cs');
+    fs.writeFileSync(source, `
+using System;
+using System.IO;
+using System.Diagnostics;
+class Stub {
+  static int Main(string[] a) {
+    string name = Path.GetFileNameWithoutExtension(Process.GetCurrentProcess().MainModule.FileName).ToLowerInvariant();
+    string dir = Environment.GetEnvironmentVariable("FAKE_DIR");
+    if (name == "git") {
+      if (a[0] == "clone") {
+        if (File.Exists(Path.Combine(dir, "fail-clone"))) return 1;
+        string dest = a[a.Length - 1];
+        Directory.CreateDirectory(Path.Combine(dest, ".git"));
+        File.Copy(Path.Combine(dir, "remote"), Path.Combine(dest, ".head"), true);
+        string header = Environment.GetEnvironmentVariable("GIT_CONFIG_VALUE_0");
+        if (header != null) { Console.WriteLine(header); Console.WriteLine(Environment.GetEnvironmentVariable("GIT_CONFIG_KEY_0")); }
+      } else if (a[0] == "pull") File.Copy(Path.Combine(dir, "remote"), ".head", true);
+      else if (a[0] == "fetch") File.Copy(Path.Combine(dir, "remote"), ".fetch", true);
+      else if (a[0] == "merge-base") { if (File.ReadAllText(".fetch") == "rewound-commit") return 1; }
+      else if (a[0] == "rev-parse") Console.Write(File.ReadAllText(a[1] == "HEAD" ? ".head" : ".fetch"));
+      else return 1;
+    } else if (name == "docker") {
+      if (a.Length > 1 && a[1] == "down" && File.Exists(Path.Combine(dir, "fail-down"))) return 1;
+      if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "fail-up"))) return 1;
+      if (a.Length > 2 && a[1] == "ps" && a[2] == "-q") Console.WriteLine("container1");
+      else if (a[0] == "stats") Console.WriteLine("{\\"Name\\":\\"app\\",\\"CPUPerc\\":\\"3%\\",\\"MemUsage\\":\\"1MiB / 2MiB\\",\\"MemPerc\\":\\"50%\\",\\"NetIO\\":\\"1B / 2B\\",\\"BlockIO\\":\\"3B / 4B\\"}");
+      else Console.WriteLine("docker " + String.Join(" ", a));
+    } else if (name == "sh") Console.WriteLine(a[a.Length - 1]);
+    else if (name == "ssh-keygen") {
+      string key = a[a.Length - 1]; File.WriteAllText(key, "private"); File.WriteAllText(key + ".pub", "ssh-ed25519 test-public-key");
+    }
+    return 0;
+  }
+}`);
+    const compiler = path.join(process.env.WINDIR, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+    const built = spawnSync(compiler, ['/nologo', `/out:${path.join(bin, 'git.exe')}`, source], { encoding: 'utf8' });
+    assert.equal(built.status, 0, built.stderr || built.stdout);
+    for (const name of ['docker', 'sh', 'ssh-keygen']) fs.copyFileSync(path.join(bin, 'git.exe'), path.join(bin, `${name}.exe`));
+    return;
+  }
+  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh
+case "$1" in
+  clone) [ ! -f "$FAKE_DIR/fail-clone" ] || exit 1; for last do :; done; mkdir -p "$last/.git"; cp "$FAKE_DIR/remote" "$last/.head"; if [ -n "$GIT_CONFIG_VALUE_0" ]; then echo "$GIT_CONFIG_VALUE_0"; echo "$GIT_CONFIG_KEY_0"; fi;;
+  pull) cp "$FAKE_DIR/remote" .head;;
+  fetch) cp "$FAKE_DIR/remote" .fetch;;
+  merge-base) [ "$(cat .fetch)" != "rewound-commit" ];;
+  rev-parse) if [ "$2" = HEAD ]; then cat .head; else cat .fetch; fi;;
+  *) exit 1;;
+esac
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
+if [ "$2" = down ] && [ -f "$FAKE_DIR/fail-down" ]; then exit 1; fi
+if [ "$2" = up ] && [ -f "$FAKE_DIR/fail-up" ]; then exit 1; fi
+if [ "$2" = ps ] && [ "$3" = -q ]; then echo container1
+elif [ "$1" = stats ]; then echo '{"Name":"app","CPUPerc":"3%","MemUsage":"1MiB / 2MiB","MemPerc":"50%","NetIO":"1B / 2B","BlockIO":"3B / 4B"}'
+else echo "docker $*"; fi
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ssh-keygen'), '#!/bin/sh\nfor last do :; done\necho private > "$last"\necho "ssh-ed25519 test-public-key" > "$last.pub"\n', { mode: 0o755 });
+}
 
 async function freePort() {
   const server = net.createServer();
@@ -26,18 +89,12 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-deploy-test-'));
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
+  const proc = path.join(dir, 'proc');
+  fs.mkdirSync(proc);
+  fs.writeFileSync(path.join(proc, 'stat'), 'cpu 100 0 100 800 0 0 0 0\n');
+  fs.writeFileSync(path.join(proc, 'meminfo'), 'MemTotal: 1000 kB\nMemAvailable: 400 kB\n');
   fs.writeFileSync(path.join(dir, 'remote'), 'first-commit');
-  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh
-case "$1" in
-  clone) for last do :; done; mkdir -p "$last/.git"; cp "$FAKE_DIR/remote" "$last/.head";;
-  pull) cp "$FAKE_DIR/remote" .head;;
-  fetch) cp "$FAKE_DIR/remote" .fetch;;
-  merge-base) [ "$(cat .fetch)" != "rewound-commit" ];;
-  rev-parse) if [ "$2" = HEAD ]; then cat .head; else cat .fetch; fi;;
-  *) exit 1;;
-esac
-`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\necho "docker $*"\n', { mode: 0o755 });
+  makeStubs(bin);
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   let child;
@@ -45,7 +102,7 @@ esac
   function start() {
     child = spawn(process.execPath, ['server.js'], {
       cwd: root,
-      env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), DEPLOY_TOKEN: token, DATA_DIR: path.join(dir, 'data'), POLL_INTERVAL_SECONDS: '10', FAKE_DIR: dir, PATH: `${bin}:${process.env.PATH}` },
+      env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), DEPLOY_TOKEN: token, DATA_DIR: path.join(dir, 'data'), HOST_PROC_DIR: proc, POLL_INTERVAL_SECONDS: '10', FAKE_DIR: dir, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     child.stdout.on('data', chunk => { output += chunk; });
@@ -101,6 +158,16 @@ esac
   assert.match(repo.log, /docker compose ps/);
   assert.match(repo.log, /docker compose logs --tail=100/);
   assert.match(repo.log, /custom-step/);
+  assert.ok(repo.lastPulled);
+  const metric = await (await request('/api/metrics')).json();
+  assert.equal(metric.containers[0].name, 'app');
+  assert.equal(metric.containers[0].cpu, '3%');
+  assert.equal(metric.host.cpuPercent, null);
+  assert.equal(metric.host.memoryUsed, 600 * 1024);
+  assert.equal(metric.host.memoryTotal, 1000 * 1024);
+  fs.writeFileSync(path.join(proc, 'stat'), 'cpu 160 0 120 820 0 0 0 0\n');
+  assert.equal((await (await request('/api/metrics')).json()).host.cpuPercent, 80);
+  assert.ok((await (await request('/api/activity')).json()).some(entry => entry.repoId === id));
   await stop();
   start();
   repo = await waitFor(async () => { const item = await current(id); return item && item.status === 'deployed' && item; });
@@ -117,7 +184,42 @@ esac
   repo = await waitFor(async () => { const item = await current(id); return item.status === 'error' && item; }, 14000);
   assert.match(repo.message, /not a fast-forward/);
   assert.equal(repo.commit, 'second-commit');
-  assert.equal((await request(`/api/repos/${id}`, 'DELETE')).status, 200);
+  fs.writeFileSync(path.join(dir, 'fail-down'), '');
+  assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true })).status, 500);
+  assert.ok(await current(id));
+  assert.match((await current(id)).message, /Removal failed/);
+  fs.rmSync(path.join(dir, 'fail-down'));
+  assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true })).status, 200);
+  assert.ok((await (await request('/api/activity')).json()).some(entry => /docker compose down --rmi local/.test(entry.text)));
+
+  fs.writeFileSync(path.join(dir, 'fail-clone'), '');
+  const privateToken = 'test-secret-token';
+  const privateResponse = await request('/api/repos', 'POST', { url: 'https://example.com/private.git', auth: { type: 'token', username: 'testuser', token: privateToken } });
+  const privateRepo = await privateResponse.json();
+  await waitFor(async () => (await current(privateRepo.id)).cloneFailed);
+  assert.equal((await request(`/api/repos/${privateRepo.id}`, 'PATCH', { auth: { type: 'token', username: 'testuser', token: privateToken } })).status, 200);
+  fs.rmSync(path.join(dir, 'fail-clone'));
+  assert.equal((await request(`/api/repos/${privateRepo.id}/clone`, 'POST')).status, 202);
+  const cloned = await waitFor(async () => { const item = await current(privateRepo.id); return item.status === 'ready' && !item.cloneFailed && item; });
+  assert.doesNotMatch(JSON.stringify(cloned), /test-secret-token|dGVzdHVzZXI6dGVzdC1zZWNyZXQtdG9rZW4=/);
+  assert.match(cloned.log, /\[REDACTED\]/);
+  assert.match(cloned.log, /http\.https:\/\/example\.com\/\.extraheader/);
+  assert.equal((await request(`/api/repos/${privateRepo.id}`, 'DELETE')).status, 200);
+  assert.equal(fs.existsSync(path.join(dir, 'data', 'credentials', `${privateRepo.id}.json`)), false);
+
+  const sshResponse = await request('/api/repos', 'POST', { url: 'ssh://git@example.com/private.git', auth: { type: 'ssh' } });
+  const sshRepo = await sshResponse.json();
+  assert.equal(sshRepo.status, 'awaiting-key');
+  assert.match(sshRepo.publicKey, /^ssh-ed25519/);
+  assert.equal((await request(`/api/repos/${sshRepo.id}/clone`, 'POST')).status, 202);
+  await waitFor(async () => (await current(sshRepo.id)).status === 'ready');
+  fs.writeFileSync(path.join(dir, 'fail-up'), '');
+  assert.equal((await request(`/api/repos/${sshRepo.id}/deploy`, 'POST')).status, 202);
+  await waitFor(async () => (await current(sshRepo.id)).status === 'error');
+  assert.ok((await (await request('/api/metrics')).json()).containers.some(item => item.repoId === sshRepo.id));
+  fs.rmSync(path.join(dir, 'fail-up'));
+  assert.equal((await request(`/api/repos/${sshRepo.id}`, 'DELETE')).status, 200);
+  assert.equal(fs.existsSync(path.join(dir, 'data', 'credentials', `${sshRepo.id}.key`)), false);
   assert.equal((await request('/api/repos')).status, 200);
   assert.equal((await (await request('/api/repos')).json()).length, 0);
 });

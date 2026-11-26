@@ -12,17 +12,19 @@
     <aside class="sidebar">
       <div class="brand"><span class="brand-icon">↗</span><span>Git Deploy<small>WORKFLOW AUTOMATION</small></span></div>
       <div class="nav-label">WORKSPACE</div>
-      <nav aria-label="Repository views">
-        <button class="nav active" data-filter="all"><span>▦</span> Repositories</button>
-        <button class="nav" data-filter="watching"><span>◉</span> Watching</button>
-        <button class="nav" data-filter="deployed"><span>◇</span> Deployed</button>
-        <button class="nav" data-filter="error"><span>△</span> Needs attention</button>
+      <nav aria-label="Workspace pages">
+        <button class="nav active" data-page="dashboard"><span>▦</span> Repositories</button>
+        <button class="nav" data-page="metrics"><span>▥</span> System metrics</button>
+        <button class="nav" data-page="activity"><span>≡</span> Activity feed</button>
+        <button class="nav" data-page="help"><span>?</span> Developer guide</button>
       </nav>
-      <div class="sidebar-foot"><span class="pulse"></span> Your deployment workspace <button id="logout" class="link">Log out</button></div>
+      <div class="sidebar-foot"><label for="theme">Theme</label><select id="theme"><option value="dark">Dark</option><option value="futuristic">Futuristic</option><option value="midnight">Midnight</option><option value="light">Light</option><option value="sand">Sand</option></select><button id="logout" class="link">Log out</button></div>
     </aside>
     <main>
-      <header class="topbar"><span>WORKSPACE <span class="crumb">/</span> <strong>OVERVIEW</strong></span><span class="top-status"><span class="pulse"></span> Local instance</span></header>
+      <header class="topbar"><span>WORKSPACE <span class="crumb">/</span> <strong id="current-page">REPOSITORIES</strong></span><span class="top-status"><span class="pulse"></span> Local instance</span></header>
       <div class="content">
+        <div id="notice" role="status"></div>
+        <div id="dashboard-page">
         <div class="heading">
           <div><div class="eyebrow">YOUR WORKSPACE <span>✦</span></div><h1>Deployments<span>.</span></h1><p>Keep your projects moving, automatically.</p></div>
           <button id="add-open" class="primary">＋ Add repository</button>
@@ -33,9 +35,33 @@
           <div class="stat"><span>DEPLOYED</span><strong id="deployed">—</strong><small>Successful deployments</small><i>◇</i></div>
           <div class="stat"><span>NEEDS ATTENTION</span><strong id="errors">—</strong><small>Check activity logs</small><i>△</i></div>
         </div>
-        <div class="section-title"><div><h2 id="view-title">Repositories</h2><p>Your projects, all in one place.</p></div><span class="live"><span class="pulse"></span> LIVE UPDATES</span></div>
-        <div id="notice" role="status"></div>
+        <section class="metrics" aria-labelledby="metrics-title">
+          <div class="section-title"><div><h2 id="metrics-title">System overview</h2><p>Live snapshots · refreshed every 15 seconds</p></div><button type="button" class="metrics-link" data-open-metrics>View all metrics →</button></div>
+          <div id="metrics-summary" class="metrics-summary">Loading metrics…</div>
+        </section>
+        <div class="section-title"><div><h2>Repositories</h2><p>Your projects, all in one place.</p></div><span class="live"><span class="pulse"></span> LIVE UPDATES</span></div>
+        <div class="filters" role="group" aria-label="Filter repositories">
+          <button type="button" class="filter active" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="filter" data-filter="watching" aria-pressed="false">Watching</button>
+          <button type="button" class="filter" data-filter="deployed" aria-pressed="false">Deployed</button>
+          <button type="button" class="filter" data-filter="error" aria-pressed="false">Needs attention</button>
+        </div>
         <div id="repos" class="repo-list"></div>
+        </div>
+        <section id="metrics-page" hidden>
+          <div class="eyebrow">RESOURCE MONITOR</div><h1>System metrics<span>.</span></h1>
+          <p class="page-description">Current snapshots for the Git Deploy process, Docker host, and managed containers. Not historical or health monitoring.</p>
+          <div id="metrics-detail" aria-live="polite">Loading metrics…</div>
+        </section>
+        <section id="activity-page" hidden><div class="section-title"><div><h1>Activity feed<span>.</span></h1><p>Recent output from all repositories. Logs may contain secrets.</p></div></div><label class="scroll-toggle"><input id="feed-autoscroll" type="checkbox" checked> Auto-scroll to latest</label><pre id="feed-content">No activity yet.</pre></section>
+        <section id="help-page" class="guide" hidden>
+          <div class="eyebrow">DEVELOPER GUIDE</div><h1>How to deploy<span>.</span></h1>
+          <h2>1. Connect a repository</h2><p>Select <strong>Add repository</strong>, enter its HTTPS or ssh:// URL and branch, and choose authentication. For generated SSH keys, add the displayed public key as a read-only deploy key and configure verified host keys in the Git Deploy runtime before cloning.</p>
+          <h2>2. Deploy and watch</h2><p>After cloning, select <strong>Deploy</strong>. Git Deploy pulls the branch and runs Docker Compose from its own clone. A successful first deployment enables polling; use Pause to stop checks. Inspect Activity after errors.</p>
+          <h2>3. Existing deployments</h2><p>Git Deploy does not automatically attach to existing containers. Check the Compose project name, environment files, ports, and persistent paths before deploying from the new clone; otherwise a second project or conflicting services may be created.</p>
+          <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>
+          <h2>Security and operations</h2><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
+        </section>
         <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW.</footer>
       </div>
     </main>
@@ -54,7 +80,11 @@
       <label for="url">Repository URL</label><input id="url" type="url" placeholder="https://github.com/you/project.git" required>
       <label for="branch">Branch</label><input id="branch" value="main" required>
       <label for="new-script">Custom script <span class="muted">(optional)</span></label><textarea id="new-script" rows="3" placeholder="e.g. npm run migrate"></textarea>
+      <label for="auth-type">Repository authentication</label><select id="auth-type"><option value="none">Existing Git / SSH configuration</option><option value="token">HTTPS token</option><option value="ssh">Generate SSH deploy key</option></select>
+      <div id="token-fields" hidden><label for="git-username">Git username</label><input id="git-username" autocomplete="off" placeholder="Git provider username"><label for="git-token">Git access token</label><input id="git-token" type="password" autocomplete="new-password"><p class="hint">Stored on the server in the protected data directory. Use a scoped read-only token.</p></div>
+      <p id="ssh-hint" class="hint" hidden>A key will be generated. Add its public key to the provider and configure verified host keys before starting the clone.</p>
       <p class="hint">Runs inside the Git Deploy runtime after Docker Compose starts. Only use trusted scripts.</p>
+      <p id="add-error" class="error" role="alert"></p>
       <button class="primary wide" type="submit">Clone repository →</button>
     </form>
   </dialog>
@@ -62,13 +92,18 @@
     <form id="settings-form">
       <div class="dialog-head"><div><div class="eyebrow">PROJECT SETTINGS</div><h2>Custom script</h2><p>Executed after Compose starts on each deployment.</p></div><button type="button" class="close" data-close="settings-dialog" aria-label="Close">×</button></div>
       <label for="edit-script">Shell commands</label><textarea id="edit-script" rows="7"></textarea>
+      <div id="edit-token-fields" hidden><label for="edit-username">New Git username</label><input id="edit-username" autocomplete="off"><label for="edit-token">New Git access token</label><input id="edit-token" type="password" autocomplete="new-password"><p class="hint">Leave both blank to keep the current token. Enter both to rotate it.</p></div>
       <p class="hint">Commands run with Docker host access. Only use trusted scripts.</p>
+      <p id="settings-error" class="error" role="alert"></p>
       <button class="primary wide" type="submit">Save settings</button>
     </form>
   </dialog>
   <dialog id="log-dialog">
     <div class="dialog-head"><div><div class="eyebrow">DEPLOYMENT OUTPUT</div><h2>Activity log</h2><p id="log-title"></p></div><button type="button" class="close" data-close="log-dialog" aria-label="Close">×</button></div>
+    <label class="scroll-toggle"><input id="log-autoscroll" type="checkbox" checked> Auto-scroll to latest</label>
     <pre id="log-content"></pre>
   </dialog>
+  <dialog id="key-dialog"><div class="dialog-head"><div><div class="eyebrow">SSH DEPLOY KEY</div><h2>Authorize the key</h2><p>Add this public key to your Git provider and configure verified host keys in the runtime.</p></div><button type="button" class="close" data-close="key-dialog" aria-label="Close">×</button></div><pre id="public-key"></pre><button id="clone-key" type="button" class="primary wide">Key authorized — clone repository</button></dialog>
+  <dialog id="delete-dialog"><form id="delete-form"><div class="dialog-head"><div><div class="eyebrow">REMOVE PROJECT</div><h2 id="delete-title">Remove repository</h2><p>Its clone and stored credentials will be deleted.</p></div><button type="button" class="close" data-close="delete-dialog" aria-label="Close">×</button></div><label class="scroll-toggle"><input id="delete-containers" type="checkbox"> Stop and remove Compose services</label><label class="scroll-toggle"><input id="delete-images" type="checkbox" disabled> Also remove locally built images</label><p class="hint">Compose project names and images can be shared with other deployments. Cleanup may affect them. Volumes are not removed. A failed cleanup keeps the repository.</p><button class="danger wide" type="submit">Remove repository</button></form></dialog>
 </body>
 </html>

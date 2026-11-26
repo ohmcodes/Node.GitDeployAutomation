@@ -13,7 +13,9 @@ services:
       DEPLOY_TOKEN: ${DEPLOY_TOKEN:?Set DEPLOY_TOKEN in your environment or .env file}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
       PORT: "3014"
+      HOST_PROC_DIR: /host/proc
       DATA_DIR: /srv/git-deploy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/git-deploy:/srv/git-deploy
+      - /proc:/host/proc:ro

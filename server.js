@@ -4,11 +4,14 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const os = require('node:os');
 const { execFile } = require('node:child_process');
 
 const root = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const reposDir = path.join(root, 'repos');
 const stateFile = path.join(root, 'state.json');
+const activityFile = path.join(root, 'activity.json');
+const credentialsDir = path.join(root, 'credentials');
 const token = process.env.DEPLOY_TOKEN || '';
 const interval = Number(process.env.POLL_INTERVAL_SECONDS || 60);
 const port = Number(process.env.PORT || 3000);
@@ -18,8 +21,11 @@ if (token.length < 16) throw new Error('DEPLOY_TOKEN must be at least 16 charact
 if (!Number.isInteger(interval) || interval < 10) throw new Error('POLL_INTERVAL_SECONDS must be an integer of at least 10');
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be between 1 and 65535');
 fs.mkdirSync(reposDir, { recursive: true, mode: 0o700 });
+fs.mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
 let repos = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : [];
 if (!Array.isArray(repos)) throw new Error('Invalid state file');
+let activity = fs.existsSync(activityFile) ? JSON.parse(fs.readFileSync(activityFile, 'utf8')) : [];
+if (!Array.isArray(activity)) throw new Error('Invalid activity file');
 const active = new Set();
 
 function save() {
@@ -29,7 +35,8 @@ function save() {
 }
 
 for (const repo of repos) {
-  if (['cloning', 'deploying', 'checking'].includes(repo.status)) {
+  if (['cloning', 'deploying', 'rebuilding', 'checking', 'removing'].includes(repo.status)) {
+    if (repo.status === 'cloning') repo.cloneFailed = true;
     repo.status = 'error';
     repo.message = 'Operation interrupted by restart. Deploy manually to retry.';
   }
@@ -38,6 +45,11 @@ save();
 
 function append(repo, text) {
   repo.log = ((repo.log || '') + text).slice(-40000);
+  activity.push({ time: new Date().toISOString(), repoId: repo.id, url: repo.url, text: text.slice(-40000) });
+  activity = activity.slice(-200);
+  const tmp = `${activityFile}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(activity), { mode: 0o600 });
+  fs.renameSync(tmp, activityFile);
   save();
 }
 
@@ -85,16 +97,39 @@ function exec(program, args, options) {
   });
 }
 
+function credentialsPath(repo) {
+  return path.join(credentialsDir, `${repo.id}.json`);
+}
+
+function readCredentials(repo) {
+  const file = credentialsPath(repo);
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+}
+
 async function run(repo, program, args, cwd) {
   append(repo, `\n$ ${program} ${args.join(' ')}\n`);
+  const credentials = program === 'git' ? readCredentials(repo) : null;
+  const secret = credentials && credentials.type === 'token' ? credentials.token : '';
+  const redact = text => {
+    if (!secret) return text;
+    return text.split(secret).join('[REDACTED]').split(Buffer.from(`${credentials.username}:${secret}`).toString('base64')).join('[REDACTED]');
+  };
   try {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
     delete env.DEPLOY_TOKEN;
+    if (credentials && credentials.type === 'token') {
+      env.GIT_CONFIG_COUNT = '1';
+      env.GIT_CONFIG_KEY_0 = `http.${new URL(repo.url).origin}/.extraheader`;
+      env.GIT_CONFIG_VALUE_0 = `Authorization: Basic ${Buffer.from(`${credentials.username}:${secret}`).toString('base64')}`;
+    } else if (credentials && credentials.type === 'ssh') {
+      const key = path.join(credentialsDir, `${repo.id}.key`);
+      env.GIT_SSH_COMMAND = `ssh -i '${key.replace(/'/g, "'\\''")}' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes`;
+    }
     const result = await exec(program, args, { cwd, maxBuffer: 2 * 1024 * 1024, env });
-    append(repo, (result.stdout || '') + (result.stderr || ''));
+    append(repo, redact((result.stdout || '') + (result.stderr || '')));
     return result.stdout.trim();
   } catch (error) {
-    append(repo, (error.stdout || '') + (error.stderr || '') + `\n${error.message}\n`);
+    append(repo, redact((error.stdout || '') + (error.stderr || '') + `\n${error.message}\n`));
     throw new Error(`${program} failed`);
   }
 }
@@ -126,12 +161,20 @@ async function clone(repo) {
   await exclusive(repo, 'cloning', async () => {
     await run(repo, 'git', ['clone', '--branch', repo.branch, '--single-branch', '--', repo.url, location(repo)], reposDir);
   });
+  repo.cloneFailed = repo.status === 'error';
+  save();
 }
 
 async function deployWork(repo) {
   const cwd = location(repo);
   await run(repo, 'git', ['pull', '--ff-only', 'origin', repo.branch], cwd);
+  repo.lastPulled = new Date().toISOString();
+  repo.status = 'rebuilding';
+  repo.composeAttempted = true;
+  save();
   await run(repo, 'docker', ['compose', 'up', '-d', '--build'], cwd);
+  repo.status = 'deploying';
+  save();
   if (repo.script) await run(repo, 'sh', ['-c', repo.script], cwd);
   await run(repo, 'docker', ['compose', 'ps'], cwd);
   await run(repo, 'docker', ['compose', 'logs', '--tail=100'], cwd);
@@ -182,6 +225,64 @@ function validBranch(value) {
     !value.split('/').some(part => part.startsWith('.') || part.endsWith('.lock'));
 }
 
+function validTokenAuth(auth, url) {
+  return auth && auth.type === 'token' && new URL(url).protocol === 'https:' &&
+    typeof auth.username === 'string' && !!auth.username && auth.username.length <= 200 && !/[:\r\n]/.test(auth.username) &&
+    typeof auth.token === 'string' && !!auth.token && auth.token.length <= 4096 && !/[\r\n]/.test(auth.token);
+}
+
+let previousHostCpu;
+let previousRuntimeCpu;
+function hostMetrics() {
+  const proc = process.env.HOST_PROC_DIR;
+  if (!proc) return { error: 'Host metrics require HOST_PROC_DIR to point to the Docker host proc filesystem.' };
+  try {
+    const cpu = fs.readFileSync(path.join(proc, 'stat'), 'utf8').split('\n')[0].trim().split(/\s+/).slice(1).map(Number);
+    if (cpu.length < 4 || cpu.some(value => !Number.isFinite(value))) throw new Error('Invalid host CPU data');
+    const total = cpu.slice(0, 8).reduce((sum, value) => sum + value, 0);
+    const idle = cpu[3] + (cpu[4] || 0);
+    const deltaTotal = previousHostCpu ? total - previousHostCpu.total : 0;
+    const cpuPercent = deltaTotal > 0 ? 100 * (1 - (idle - previousHostCpu.idle) / deltaTotal) : null;
+    previousHostCpu = { total, idle };
+    const memory = fs.readFileSync(path.join(proc, 'meminfo'), 'utf8');
+    const totalMatch = memory.match(/^MemTotal:\s+(\d+)\s+kB/m);
+    const availableMatch = memory.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+    if (!totalMatch || !availableMatch) throw new Error('Host memory information unavailable');
+    return { cpuPercent, memoryTotal: Number(totalMatch[1]) * 1024, memoryUsed: (Number(totalMatch[1]) - Number(availableMatch[1])) * 1024 };
+  } catch (error) {
+    return { error: `Host metrics unavailable: ${error.message}` };
+  }
+}
+
+async function metrics() {
+  const usage = process.cpuUsage();
+  const now = process.hrtime.bigint();
+  const runtimeCpu = previousRuntimeCpu ? 100 * ((usage.user + usage.system) - previousRuntimeCpu.used) / (Number(now - previousRuntimeCpu.time) / 1000) : null;
+  previousRuntimeCpu = { used: usage.user + usage.system, time: now };
+  const result = {
+    runtime: { cpuPercent: runtimeCpu, rss: process.memoryUsage().rss, heapUsed: process.memoryUsage().heapUsed, uptime: process.uptime(), platform: os.platform() },
+    host: hostMetrics(),
+    containers: []
+  };
+  for (const repo of repos) {
+    if ((!repo.lastDeployed && !repo.composeAttempted) || !fs.existsSync(path.join(location(repo), '.git'))) continue;
+    try {
+      const options = { cwd: location(repo), env: { ...process.env }, maxBuffer: 2 * 1024 * 1024 };
+      delete options.env.DEPLOY_TOKEN;
+      const ids = (await exec('docker', ['compose', 'ps', '-q'], options)).stdout.trim().split(/\s+/).filter(Boolean);
+      if (!ids.length) continue;
+      const output = (await exec('docker', ['stats', '--no-stream', '--format', '{{json .}}', ...ids], options)).stdout.trim();
+      for (const line of output.split('\n').filter(Boolean)) {
+        const stat = JSON.parse(line);
+        result.containers.push({ repoId: repo.id, name: stat.Name, cpu: stat.CPUPerc, memory: stat.MemUsage, memoryPercent: stat.MemPerc, network: stat.NetIO, block: stat.BlockIO });
+      }
+    } catch (error) {
+      result.containers.push({ repoId: repo.id, error: `Container metrics unavailable: ${error.message}` });
+    }
+  }
+  return result;
+}
+
 function send(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(value));
@@ -229,22 +330,53 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (pathname === '/api/repos' && req.method === 'GET') return send(res, 200, repos);
+    if (pathname === '/api/activity' && req.method === 'GET') return send(res, 200, activity);
+    if (pathname === '/api/metrics' && req.method === 'GET') return send(res, 200, await metrics());
     if (pathname === '/api/repos' && req.method === 'POST') {
       const input = await body(req);
       const branch = input.branch || 'main';
       const script = input.script || '';
+      const auth = input.auth || { type: 'none' };
       if (!validUrl(input.url) || !validBranch(branch) || typeof script !== 'string' || script.length > 10000) {
         return send(res, 400, { error: 'Invalid URL, branch, or script' });
       }
-      const repo = { id: crypto.randomUUID(), url: input.url, branch, script, watching: true, status: 'ready', message: '', log: '', commit: null, lastDeployed: null, lastChecked: null };
+      if (!auth || !['none', 'token', 'ssh'].includes(auth.type) ||
+          (auth.type === 'token' && !validTokenAuth(auth, input.url)) ||
+          (auth.type === 'ssh' && new URL(input.url).protocol !== 'ssh:')) {
+        return send(res, 400, { error: 'Invalid authentication settings for repository URL' });
+      }
+      const repo = { id: crypto.randomUUID(), url: input.url, branch, script, authType: auth.type, watching: true, status: 'ready', message: '', log: '', commit: null, lastDeployed: null, lastChecked: null };
+      if (auth.type === 'token') {
+        fs.writeFileSync(credentialsPath(repo), JSON.stringify({ type: 'token', username: auth.username, token: auth.token }), { mode: 0o600, flag: 'wx' });
+      } else if (auth.type === 'ssh') {
+        const key = path.join(credentialsDir, `${repo.id}.key`);
+        try {
+          await exec('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key], { maxBuffer: 1024 * 1024 });
+          repo.publicKey = fs.readFileSync(`${key}.pub`, 'utf8').trim();
+          fs.writeFileSync(credentialsPath(repo), JSON.stringify({ type: 'ssh' }), { mode: 0o600, flag: 'wx' });
+          repo.status = 'awaiting-key';
+        } catch (error) {
+          fs.rmSync(key, { force: true });
+          fs.rmSync(`${key}.pub`, { force: true });
+          throw error;
+        }
+      }
       repos.push(repo);
       save();
+      append(repo, auth.type === 'ssh' ? 'Repository added; awaiting SSH key authorization.\n' : 'Repository added.\n');
+      if (auth.type !== 'ssh') void clone(repo);
+      return send(res, 202, repo);
+    }
+    const match = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})(?:\/(deploy|clone))?$/);
+    const repo = match && repos.find(item => item.id === match[1]);
+    if (!repo) return send(res, 404, { error: 'Not found' });
+    if (match[2] === 'clone' && req.method === 'POST') {
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      if (repo.status !== 'awaiting-key' && !repo.cloneFailed) return send(res, 409, { error: 'Repository is not awaiting a clone' });
+      if (repo.cloneFailed) fs.rmSync(location(repo), { recursive: true, force: true });
       void clone(repo);
       return send(res, 202, repo);
     }
-    const match = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})(?:\/(deploy))?$/);
-    const repo = match && repos.find(item => item.id === match[1]);
-    if (!repo) return send(res, 404, { error: 'Not found' });
     if (match[2] === 'deploy' && req.method === 'POST') {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
       if (!fs.existsSync(path.join(location(repo), '.git'))) return send(res, 409, { error: 'Clone failed; add the repository again' });
@@ -254,19 +386,54 @@ const server = http.createServer(async (req, res) => {
     if (!match[2] && req.method === 'PATCH') {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
       const input = await body(req);
+      if (!repos.includes(repo)) return send(res, 404, { error: 'Not found' });
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
       if ((input.script !== undefined && (typeof input.script !== 'string' || input.script.length > 10000)) ||
-          (input.watching !== undefined && typeof input.watching !== 'boolean')) return send(res, 400, { error: 'Invalid settings' });
+          (input.watching !== undefined && typeof input.watching !== 'boolean') ||
+          (input.auth !== undefined && (repo.authType !== 'token' || !validTokenAuth(input.auth, repo.url)))) return send(res, 400, { error: 'Invalid settings' });
+      if (input.auth !== undefined) fs.writeFileSync(credentialsPath(repo), JSON.stringify(input.auth), { mode: 0o600 });
       if (input.script !== undefined) repo.script = input.script;
-      if (input.watching !== undefined) repo.watching = input.watching;
+      if (input.watching !== undefined && input.watching !== repo.watching) {
+        repo.watching = input.watching;
+        append(repo, input.watching ? 'Watching resumed.\n' : 'Watching paused.\n');
+      }
+      if (input.auth !== undefined) append(repo, 'Repository token updated.\n');
       save();
       return send(res, 200, repo);
     }
     if (!match[2] && req.method === 'DELETE') {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
-      repos = repos.filter(item => item !== repo);
-      save();
-      fs.rmSync(location(repo), { recursive: true, force: true });
-      return send(res, 200, { ok: true });
+      const input = req.headers['content-length'] || req.headers['transfer-encoding'] ? await body(req) : {};
+      if (!repos.includes(repo)) return send(res, 404, { error: 'Not found' });
+      if ((input.containers !== undefined && typeof input.containers !== 'boolean') ||
+          (input.images !== undefined && typeof input.images !== 'boolean') || (input.images && !input.containers)) {
+        return send(res, 400, { error: 'Invalid cleanup options' });
+      }
+      if (input.containers && !fs.existsSync(path.join(location(repo), '.git'))) {
+        return send(res, 409, { error: 'Cannot run Compose cleanup without a cloned repository' });
+      }
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      active.add(repo.id);
+      try {
+        if (input.containers) {
+          repo.status = 'removing';
+          save();
+          await run(repo, 'docker', ['compose', 'down', ...(input.images ? ['--rmi', 'local'] : [])], location(repo));
+        }
+        fs.rmSync(location(repo), { recursive: true, force: true });
+        for (const file of [credentialsPath(repo), path.join(credentialsDir, `${repo.id}.key`), path.join(credentialsDir, `${repo.id}.key.pub`)]) fs.rmSync(file, { force: true });
+        append(repo, 'Repository removed.\n');
+        repos = repos.filter(item => item !== repo);
+        save();
+        return send(res, 200, { ok: true });
+      } catch (error) {
+        repo.status = 'error';
+        repo.message = `Removal failed: ${error.message}`;
+        save();
+        return send(res, 500, { error: repo.message });
+      } finally {
+        active.delete(repo.id);
+      }
     }
     return send(res, 404, { error: 'Not found' });
   } catch (error) {
