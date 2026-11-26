@@ -1,13 +1,19 @@
 services:
   git-deploy:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: gitdeploy
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3014:3014"
+      - "3014:3014"
+    env_file:
+      - .env
     environment:
       DEPLOY_TOKEN: ${DEPLOY_TOKEN:?Set DEPLOY_TOKEN in your environment or .env file}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
       PORT: "3014"
+      DATA_DIR: /srv/git-deploy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/git-deploy:/srv/git-deploy
