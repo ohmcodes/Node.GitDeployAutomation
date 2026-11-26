@@ -372,6 +372,7 @@ async function body(req, limit = 32768) {
 
 const assets = {
   '/': ['index.html', 'text/html; charset=utf-8'],
+  '/icon.svg': ['icon.svg', 'image/svg+xml'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8']
 };

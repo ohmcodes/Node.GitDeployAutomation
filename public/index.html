@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Git Deploy</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-icon">↗</span><span>Git Deploy<small>WORKFLOW AUTOMATION</small></span></div>
+      <div class="brand"><img class="brand-icon" src="/icon.svg" alt="" width="37" height="37"><span>Git Deploy<small>WORKFLOW AUTOMATION</small></span></div>
       <div class="nav-label">WORKSPACE</div>
       <nav aria-label="Workspace pages">
         <button class="nav active" data-page="dashboard"><span>▦</span> Repositories</button>
@@ -63,7 +64,7 @@
           <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>
           <h2>Security and operations</h2><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
         </section>
-        <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW.</footer>
+        <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW. <span>·</span> <a href="https://github.com/ohmcodes/Node.GitDeployAutomation" target="_blank" rel="noopener noreferrer">GITHUB SOURCE ↗</a></footer>
       </div>
     </main>
   </div>

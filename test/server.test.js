@@ -145,6 +145,10 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   }
   start();
   await waitFor(async () => (await fetch(base)).ok);
+  const icon = await fetch(`${base}/icon.svg`);
+  assert.equal(icon.status, 200);
+  assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
+  assert.match(await icon.text(), /<svg/);
   const malformedResponse = await new Promise((resolve, reject) => {
     const socket = net.connect(port, '127.0.0.1', () => socket.write('GET http://[ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'));
     let response = '';
