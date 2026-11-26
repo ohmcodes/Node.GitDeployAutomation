@@ -6,7 +6,7 @@
   <title>Git Deploy</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
   <div class="shell">
@@ -62,7 +62,7 @@
           <p>After deployment, <strong>Redeploy</strong> forces Compose to recreate services. <strong>View page</strong> uses the repository .env DOMAIN, or lets you choose a published TCP port using HTTP. Ensure the chosen service is a web page.</p>
           <h2>3. Existing deployments</h2><p>Git Deploy does not automatically attach to existing containers. Check the Compose project name, environment files, ports, and persistent paths before deploying from the new clone; otherwise a second project or conflicting services may be created.</p>
           <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>
-          <h2>Security and operations</h2><p>Manual deploys, repository deletion, and container stop, kill, restart or pause require a fresh authenticator code. Codes cannot be reused, even after sign-in; wait for the next code. Automatic watcher deployments do not prompt.</p><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
+          <h2>Security and operations</h2><p>Set up an authenticator on the deployment host before manual deploys, repository deletion, or container stop, kill, restart or pause. These actions require a fresh code. Codes cannot be reused, even after sign-in; wait for the next code. Automatic watcher deployments do not prompt.</p><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
         </section>
         <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW. <span>·</span> <a href="https://github.com/ohmcodes/Node.GitDeployAutomation" target="_blank" rel="noopener noreferrer">GITHUB SOURCE ↗</a></footer>
       </div>
@@ -70,11 +70,11 @@
   </div>
   <dialog id="login-dialog">
     <form id="login-form">
-      <div class="dialog-head"><div><div class="eyebrow">WELCOME BACK</div><h2>Unlock workspace</h2><p>Enter your deployment token and authenticator code.</p></div></div>
-      <label for="token">Deployment token</label><input id="token" type="password" autocomplete="current-password" required>
-      <label for="otp">Authenticator code</label><input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
-      <p class="hint">A signed-in session lasts up to eight hours. Configure your authenticator on the deployment host before signing in.</p>
-      <button class="primary wide" type="submit">Continue →</button><p id="login-error" class="error" role="alert"></p>
+      <div class="dialog-head"><div><div class="eyebrow">WELCOME BACK</div><h2>Unlock workspace</h2><p id="login-description">Checking sign-in requirements…</p></div></div>
+      <div id="login-token-fields" hidden><label for="token">Deployment token</label><input id="token" type="password" autocomplete="current-password"></div>
+      <div id="login-otp-fields" hidden><label for="otp">Authenticator code</label><input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6"></div>
+      <p id="login-hint" class="hint">A signed-in session lasts up to eight hours.</p>
+      <button class="primary wide" type="submit" disabled>Continue →</button><p id="login-error" class="error" role="alert"></p>
     </form>
   </dialog>
   <dialog id="action-auth-dialog">

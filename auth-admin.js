@@ -30,7 +30,7 @@ async function main() {
     const counter = verifyCode(secret, code);
     if (counter === null) throw new Error('Invalid authenticator code. No changes were made.');
     writeAuth(root, { secret, generation: crypto.randomBytes(16).toString('hex'), lastCounter: counter }, action === 'setup');
-    console.log('Authenticator configured. Wait for the next code before signing in. Restart Git Deploy to invalidate existing sessions.');
+    console.log('Authenticator configured. Existing sessions are invalidated. Wait for the next code before signing in.');
   } finally {
     prompt.close();
   }
