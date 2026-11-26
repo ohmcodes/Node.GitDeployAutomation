@@ -206,6 +206,12 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.equal(added.status, 202);
   const { id } = await added.json();
   await waitFor(async () => (await current(id)).status === 'ready');
+  const iconUrl = `/api/repos/${id}/icon`;
+  assert.equal((await request(iconUrl, 'GET', undefined, false)).status, 401);
+  assert.deepEqual(await (await request(iconUrl)).json(), { icon: null });
+  const cloneIcon = path.join(dataDir, 'repos', id, 'icon.svg');
+  fs.writeFileSync(cloneIcon, '<svg></svg>');
+  assert.deepEqual(await (await request(iconUrl)).json(), { icon: `data:image/svg+xml;base64,${Buffer.from('<svg></svg>').toString('base64')}` });
   const pageUrl = `/api/repos/${id}/page`;
   assert.equal((await request(pageUrl, 'GET', undefined, false)).status, 401);
   assert.equal((await request(pageUrl)).status, 409);

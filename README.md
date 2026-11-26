@@ -6,7 +6,7 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 
 ## What it does
 
-- Light and dark themes, repository filters and status colors, collapsible repository cards, a developer guide, and a centralized activity feed. Cards start collapsed and retain their state during navigation, filtering, and automatic updates until the page is reloaded or the user logs out.
+- Light and dark themes with selectable accent colors, repository filters and status colors, collapsible repository cards, a developer guide, and a centralized activity feed. Cards start collapsed; display preferences are saved in the browser's local storage across reloads and logouts.
 - Expand a repository card for Deploy or Redeploy; other operations, including activity, settings, environment editing, and removal, are under **More actions**.
 - Clone HTTPS or `ssh://` repositories, select a branch (default `main`), and manually deploy.
 - For a deployment, run `git pull --ff-only origin <branch>`, `docker compose up -d --build`, an optional custom shell script, `docker compose ps`, and `docker compose logs --tail=100` (all services).
@@ -15,7 +15,8 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 - Poll deployed repositories for changes, deploy fast-forward updates, and pause or resume watching. A repository is not automatically deployed until its first manual deployment succeeds.
 - Show Git Deploy process and configured Docker host summaries on the dashboard, per-container summaries on repository cards (including when collapsed), and detailed bars for all three on the metrics page; persist deployment state and recent activity across restarts.
 - Graph recent CPU, memory, container network and block I/O rates in the current browser session. Manage containers belonging to deployed repositories, including lifecycle actions, logs, inspect and process lists.
-- Choose one, two, or three repository, container-card, and graph columns. Container metrics cards start collapsed; expand them for details and use the graph buttons to show or hide CPU, memory, network, or disk I/O graphs. These display choices last until the page is reloaded.
+- Choose one, two, or three repository, container-card, and graph columns. Container metrics cards start collapsed; expand them for details and use the graph buttons to show or hide CPU, memory, network, or disk I/O graphs. Layout, visibility and expansion choices are saved in local storage on this browser.
+- Repository cards use an icon found in the clone, or a default icon. Discovery checks `favicon.ico`, `favicon.png`, `icon.png`, `logo.png`, `favicon.svg`, `icon.svg`, and `logo.svg` in the repository root, `public`, `static`, `assets`, `public/assets`, `src/assets`, and `app`. Only regular files up to 128 KiB are used; symlinks are ignored.
 - Require a fresh authenticator code for manual deployments, repository deletion, and container stop, kill, restart and pause. Codes cannot be reused, including immediately after login.
 - Use a managed HTTPS token or generate an SSH deploy key for a private repository.
 - Edit a repository's root `.env` after cloning, before or between deployments.

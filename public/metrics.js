@@ -1,31 +1,41 @@
-export function createMetricsScreen({ $, element, action, api, showPage, getRepos, getToken, getSession }) {
+export function createMetricsScreen({ $, element, action, api, showPage, getRepos, getToken, getSession, preferences, saveDisplay }) {
   let metricsRefreshing = false;
   let metricsData = null;
   let metricsError = '';
   const metricHistory = new Map();
   const previousIo = new Map();
-  const expandedContainers = new Set();
-  const visibleGraphs = new Set(['cpu', 'memory', 'network', 'block']);
-  let containerColumns = 1;
-  let graphColumns = 1;
+  const expandedContainers = new Set(preferences.expandedContainers);
+  const visibleGraphs = new Set(preferences.visibleGraphs);
+  let containerColumns = preferences.containerColumns;
+  let graphColumns = preferences.graphColumns;
 
-  document.querySelectorAll('[data-graph-metric]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-graph-metric]').forEach(button => {
+    button.setAttribute('aria-pressed', String(visibleGraphs.has(button.dataset.graphMetric)));
+    button.addEventListener('click', () => {
     const metric = button.dataset.graphMetric;
     if (visibleGraphs.has(metric)) visibleGraphs.delete(metric);
     else visibleGraphs.add(metric);
+    preferences.visibleGraphs = [...visibleGraphs];
+    saveDisplay();
     button.setAttribute('aria-pressed', String(visibleGraphs.has(metric)));
     renderMetrics();
-  }));
+    });
+  });
   for (const [attribute, update] of [
     ['containerColumns', value => { containerColumns = value; }],
     ['graphColumns', value => { graphColumns = value; }]
   ]) {
     const buttons = document.querySelectorAll(attribute === 'containerColumns' ? '[data-container-columns]' : '[data-graph-columns]');
-    buttons.forEach(button => button.addEventListener('click', () => {
+    buttons.forEach(button => {
+      button.setAttribute('aria-pressed', String(Number(button.dataset[attribute]) === preferences[attribute]));
+      button.addEventListener('click', () => {
       update(Number(button.dataset[attribute]));
+      preferences[attribute] = Number(button.dataset[attribute]);
+      saveDisplay();
       buttons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
       renderMetrics();
-    }));
+      });
+    });
   }
 
   function formatBytes(bytes) {
@@ -247,6 +257,8 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
         content.hidden = !content.hidden;
         if (content.hidden) expandedContainers.delete(key);
         else expandedContainers.add(key);
+        preferences.expandedContainers = [...expandedContainers];
+        saveDisplay();
         updateToggle();
       });
       toggle.dataset.containerToggle = key;
@@ -301,7 +313,6 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
         metricsData = null;
         metricsError = error.message;
         previousIo.clear();
-        expandedContainers.clear();
         const time = Date.now();
         for (const points of metricHistory.values()) {
           points.push({ time, value: null });

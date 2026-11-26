@@ -82,3 +82,18 @@ html[data-theme="light"] .empty h3,html[data-theme="sand"] .empty h3{color:#2637
 .graph-grid .history-graph{min-width:0}
 @media(max-width:1050px){.repo-list,.container-grid,.graph-grid{grid-template-columns:repeat(min(var(--columns,1),2),minmax(0,1fr))}}
 @media(max-width:700px){.repo-list,.container-grid,.graph-grid{grid-template-columns:1fr}.repo-actions{width:100%}}
+.repo-icon-image{width:100%;height:100%;object-fit:contain;border-radius:8px}
+.sidebar-foot label[for="accent"]{margin-top:14px}
+html[data-accent="blue"]{--custom-accent:#6ad7ff;--custom-accent-dark:#07516d}
+html[data-accent="purple"]{--custom-accent:#d1adff;--custom-accent-dark:#54257a}
+html[data-accent="orange"]{--custom-accent:#ffbf7c;--custom-accent-dark:#7c3d00}
+html[data-accent="pink"]{--custom-accent:#ffb0ca;--custom-accent-dark:#832745}
+html[data-accent]:not([data-accent="default"]) :is(.primary,.deploy,.brand-icon){background:var(--custom-accent);border-color:var(--custom-accent);color:#171717}
+html[data-accent]:not([data-accent="default"]) :is(h1 span,.eyebrow,.eyebrow span,.repo-icon,.metrics-link,.link,footer a,.page-link){color:var(--custom-accent)}
+html[data-accent]:not([data-accent="default"]) :is(.meter-fill,.pulse){background:var(--custom-accent)}
+html[data-accent]:not([data-accent="default"]) .history-graph polyline{stroke:var(--custom-accent)}
+html[data-accent]:not([data-accent="default"]) :is(.display-controls button[aria-pressed="true"],.inspection-switch button[aria-pressed="true"]){border-color:var(--custom-accent);box-shadow:inset 0 0 0 1px var(--custom-accent)}
+html[data-accent]:not([data-accent="default"]) :is(.nav.active,.nav:hover,.filter.active){color:var(--custom-accent);border-color:var(--custom-accent)}
+html[data-accent]:not([data-accent="default"]):is([data-theme="light"],[data-theme="sand"]) :is(h1 span,.eyebrow,.eyebrow span,.repo-icon,.metrics-link,.link,footer a,.page-link,.nav.active,.nav:hover,.filter.active){color:var(--custom-accent-dark)}
+html[data-accent]:not([data-accent="default"]):is([data-theme="light"],[data-theme="sand"]) .history-graph polyline{stroke:var(--custom-accent-dark)}
+@media(max-width:700px){.sidebar-foot{flex-wrap:wrap}.sidebar-foot label[for="accent"]{margin-top:0}}

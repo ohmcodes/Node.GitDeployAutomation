@@ -2,12 +2,15 @@
 
 import { createMetricsScreen } from './metrics.js';
 import { createContainerScreen } from './containers.js';
+import { loadPreferences, savePreferences } from './preferences.js';
 
 const $ = selector => document.querySelector(selector);
+const preferences = loadPreferences();
+const saveDisplay = () => savePreferences(preferences);
 sessionStorage.removeItem('deployToken');
 let token = sessionStorage.getItem('deploySession') || '';
 let repos = [];
-let filter = 'all';
+let filter = preferences.filter;
 let selected = null;
 let logRepoId = null;
 let keyRepoId = null;
@@ -21,8 +24,46 @@ let renderedAt = 0;
 let repoSnapshot = null;
 let actionAuthResolve = null;
 let loginMethod = null;
-const expandedRepos = new Set();
+const expandedRepos = new Set(preferences.expandedRepos);
 const openRepoMenus = new Set();
+const repoIcons = new Map();
+
+function showRepoIcon(icon, repo) {
+  const cached = repoIcons.get(repo.id);
+  const version = `${repo.commit || ''}:${repo.lastPulled || ''}:${repo.cloneFailed || false}`;
+  if (cached && cached.version === version) {
+    if (cached.icon) {
+      const image = element('img', 'repo-icon-image');
+      image.alt = '';
+      image.src = cached.icon;
+      image.addEventListener('error', () => {
+        console.warn(`Could not display icon for repository ${repo.id}`);
+        icon.textContent = '⌘';
+      });
+      icon.replaceChildren(image);
+    }
+    return;
+  }
+  if (['cloning', 'deploying', 'rebuilding', 'checking', 'removing', 'awaiting-key'].includes(repo.status)) return;
+  const entry = { version, icon: null };
+  repoIcons.set(repo.id, entry);
+  const currentSession = session;
+  api(`/api/repos/${repo.id}/icon`).then(result => {
+    if (session !== currentSession || repoIcons.get(repo.id) !== entry) return;
+    if (result.icon !== null && (typeof result.icon !== 'string' || !/^data:image\/(?:png|x-icon|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(result.icon))) {
+      throw new Error('Invalid repository icon response');
+    }
+    entry.icon = result.icon;
+    for (const current of document.querySelectorAll('.repo-icon[data-repo-id]')) {
+      if (current.dataset.repoId === repo.id) showRepoIcon(current, repo);
+    }
+  }).catch(error => {
+    if (session !== currentSession || repoIcons.get(repo.id) !== entry) return;
+    repoIcons.delete(repo.id);
+    icon.title = 'Repository icon unavailable';
+    console.warn(`Unable to load icon for repository ${repo.id}:`, error);
+  });
+}
 
 function confirmWithAuthenticator(description) {
   if (loginMethod === 'token') {
@@ -187,6 +228,8 @@ function render() {
     const recent = repo.lastPulled && Date.now() - Date.parse(repo.lastPulled) < 60000;
     const card = element('article', `repo${repo.status === 'error' ? ' is-error' : repo.status === 'rebuilding' ? ' is-rebuilding' : !repo.watching ? ' is-paused' : recent ? ' is-recent' : ''}`);
     const icon = element('div', 'repo-icon', '⌘');
+    icon.dataset.repoId = repo.id;
+    showRepoIcon(icon, repo);
     const info = element('div', 'repo-info');
     const name = repo.url.replace(/\/$/, '').split('/').pop().replace(/\.git$/, '');
     const title = element('div', 'repo-title');
@@ -204,6 +247,8 @@ function render() {
       details.hidden = !details.hidden;
       if (details.hidden) expandedRepos.delete(repo.id);
       else expandedRepos.add(repo.id);
+      preferences.expandedRepos = [...expandedRepos];
+      saveDisplay();
       updateToggle();
     });
     toggle.dataset.repoToggle = repo.id;
@@ -279,7 +324,9 @@ async function refresh() {
     repos = result;
     const repoIds = new Set(repos.map(repo => repo.id));
     for (const id of expandedRepos) if (!repoIds.has(id)) expandedRepos.delete(id);
+    preferences.expandedRepos = [...expandedRepos];
     for (const id of openRepoMenus) if (!repoIds.has(id)) openRepoMenus.delete(id);
+    for (const id of repoIcons.keys()) if (!repoIds.has(id)) repoIcons.delete(id);
     if (snapshot !== repoSnapshot || recentExpired) render();
     repoSnapshot = snapshot;
     if ($('#log-dialog').open) {
@@ -306,7 +353,8 @@ async function refresh() {
 
 const { openContainers } = createContainerScreen({ $, element, action, api, confirmWithAuthenticator, getSession: () => session });
 const { renderRepoMetrics, refreshMetrics, resetMetrics } = createMetricsScreen({
-  $, element, action, api, showPage, getRepos: () => repos, getToken: () => token, getSession: () => session
+  $, element, action, api, showPage, getRepos: () => repos, getToken: () => token, getSession: () => session,
+  preferences, saveDisplay
 });
 
 async function loadLoginMode() {
@@ -357,8 +405,8 @@ $('#login-form').addEventListener('submit', async event => {
 function clearSession() {
   session++;
   token = '';
-  expandedRepos.clear();
   openRepoMenus.clear();
+  repoIcons.clear();
   sessionStorage.removeItem('deploySession');
   repos = [];
   repoSnapshot = null;
@@ -445,6 +493,8 @@ document.querySelectorAll('.nav').forEach(button => button.addEventListener('cli
 document.querySelectorAll('[data-open-metrics]').forEach(button => button.addEventListener('click', () => showPage('metrics')));
 document.querySelectorAll('.filter').forEach(button => button.addEventListener('click', () => {
   filter = button.dataset.filter;
+  preferences.filter = filter;
+  saveDisplay();
   document.querySelectorAll('.filter').forEach(item => {
     const active = item === button;
     item.classList.toggle('active', active);
@@ -452,10 +502,26 @@ document.querySelectorAll('.filter').forEach(button => button.addEventListener('
   });
   render();
 }));
+document.querySelectorAll('.filter').forEach(button => {
+  const active = button.dataset.filter === filter;
+  button.classList.toggle('active', active);
+  button.setAttribute('aria-pressed', String(active));
+});
 document.querySelectorAll('[data-repo-columns]').forEach(button => button.addEventListener('click', () => {
   $('#repos').style.setProperty('--columns', button.dataset.repoColumns);
+  preferences.repoColumns = Number(button.dataset.repoColumns);
+  saveDisplay();
   document.querySelectorAll('[data-repo-columns]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
 }));
+$('#repos').style.setProperty('--columns', preferences.repoColumns);
+document.querySelectorAll('[data-repo-columns]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.repoColumns) === preferences.repoColumns)));
+$('#accent').value = preferences.accent;
+document.documentElement.dataset.accent = preferences.accent;
+$('#accent').addEventListener('change', () => {
+  preferences.accent = $('#accent').value;
+  document.documentElement.dataset.accent = preferences.accent;
+  saveDisplay();
+});
 const savedTheme = localStorage.getItem('theme');
 $('#theme').value = ['dark', 'futuristic', 'midnight', 'light', 'sand'].includes(savedTheme) ? savedTheme : 'dark';
 document.documentElement.dataset.theme = $('#theme').value;
