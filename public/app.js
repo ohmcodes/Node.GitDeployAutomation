@@ -179,6 +179,61 @@ async function loadContainers() {
   }
 }
 
+function inspectionTable(value) {
+  const table = element('table', 'inspection-table');
+  const heading = document.createElement('thead');
+  const header = document.createElement('tr');
+  for (const label of ['Property', 'Value']) {
+    const cell = element('th', '', label);
+    cell.scope = 'col';
+    header.append(cell);
+  }
+  heading.append(header);
+  const rows = document.createElement('tbody');
+  for (const [key, item] of Object.entries(value)) {
+    const row = document.createElement('tr');
+    const name = element('th', '', key);
+    name.scope = 'row';
+    const cell = document.createElement('td');
+    if (item !== null && typeof item === 'object') {
+      const entries = Object.keys(item).length;
+      if (!entries) {
+        cell.textContent = Array.isArray(item) ? '[]' : '{}';
+      } else {
+        const details = document.createElement('details');
+        const kind = Array.isArray(item) ? 'Array' : 'Object';
+        details.append(element('summary', '', `${kind} · ${entries} ${entries === 1 ? 'entry' : 'entries'}`));
+        details.addEventListener('toggle', () => {
+          if (details.open && details.children.length === 1) details.append(inspectionTable(item));
+        });
+        cell.append(details);
+      }
+    } else {
+      cell.textContent = JSON.stringify(item);
+    }
+    row.append(name, cell);
+    rows.append(row);
+  }
+  table.append(heading, rows);
+  return table;
+}
+
+function setInspectionView(view) {
+  const table = view === 'table';
+  $('#inspection-table').hidden = !table;
+  $('#container-output-content').hidden = table;
+  $('#inspection-table-button').setAttribute('aria-pressed', String(table));
+  $('#inspection-json-button').setAttribute('aria-pressed', String(!table));
+}
+
+function clearContainerOutput() {
+  $('#container-output').hidden = true;
+  $('#inspection-views').hidden = true;
+  $('#inspection-table').replaceChildren();
+  $('#container-output-content').textContent = '';
+  $('#container-output-content').hidden = false;
+}
+
 async function containerOperation(container, command) {
   const modifying = !['inspect', 'logs', 'processes'].includes(command);
   if (modifying && !confirm(`${command.toUpperCase()} ${container.name || container.id}? This can interrupt the service. The repository watcher will remain unchanged and may redeploy it.`)) return;
@@ -197,15 +252,15 @@ async function containerOperation(container, command) {
     if (modifying) {
       await loadContainers();
     } else {
+      clearContainerOutput();
       $('#container-output-title').textContent = `${container.name || container.id} · ${command}`;
       if (command === 'inspect') {
         const info = result.data;
-        const details = {
-          restartPolicy: info.HostConfig && info.HostConfig.RestartPolicy,
-          mounts: info.Mounts,
-          networks: info.NetworkSettings && info.NetworkSettings.Networks
-        };
-        $('#container-output-content').textContent = `Read-only configuration:\n${JSON.stringify(details, null, 2)}\n\nFull inspection (may contain secrets):\n${JSON.stringify(info, null, 2)}`;
+        if (!info || typeof info !== 'object' || Array.isArray(info)) throw new Error('Invalid container inspection data');
+        $('#inspection-table').append(inspectionTable(info));
+        $('#container-output-content').textContent = JSON.stringify(info, null, 2);
+        $('#inspection-views').hidden = false;
+        setInspectionView('table');
       } else {
         $('#container-output-content').textContent = result.output || 'No output.';
       }
@@ -276,7 +331,7 @@ function render() {
       ...(repo.authType === 'ssh' ? [action('SSH key', 'secondary', () => showKey(repo), busy)] : []),
       ...(repo.cloneFailed ? [action('Retry clone', 'secondary', () => change(repo, 'POST', undefined, '/clone'), busy)] : []),
       ...(repo.lastDeployed ? [action('View page ↗', 'secondary', () => showProjectPage(repo, name), busy)] : []),
-      ...(repo.lastDeployed || repo.composeAttempted ? [action('Containers', 'secondary', () => { containerRepoId = repo.id; $('#containers-title').textContent = name; $('#container-output').hidden = true; $('#container-output-content').textContent = ''; $('#container-list').replaceChildren(); $('#containers-dialog').showModal(); loadContainers(); }, busy)] : []),
+      ...(repo.lastDeployed || repo.composeAttempted ? [action('Containers', 'secondary', () => { containerRepoId = repo.id; $('#containers-title').textContent = name; clearContainerOutput(); $('#container-list').replaceChildren(); $('#containers-dialog').showModal(); loadContainers(); }, busy)] : []),
       action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
       action('×', 'remove', () => { selected = repo; $('#delete-title').textContent = `Remove ${name}?`; $('#delete-form').reset(); $('#delete-images').disabled = true; $('#delete-dialog').showModal(); }, busy)
     );
@@ -647,11 +702,13 @@ $('#page-dialog').addEventListener('close', () => {
   pageRequest++;
   $('#page-links').replaceChildren();
 });
+$('#inspection-table-button').addEventListener('click', () => setInspectionView('table'));
+$('#inspection-json-button').addEventListener('click', () => setInspectionView('json'));
 $('#containers-dialog').addEventListener('close', () => {
   containerRequest++;
   containerRepoId = null;
   $('#container-list').replaceChildren();
-  $('#container-output-content').textContent = '';
+  clearContainerOutput();
 });
 $('#env-form').addEventListener('submit', async event => {
   event.preventDefault();

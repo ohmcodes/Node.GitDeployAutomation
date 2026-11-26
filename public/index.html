@@ -130,7 +130,18 @@
     <div class="dialog-head"><div><div class="eyebrow">COMPOSE CONTAINERS</div><h2>Manage containers</h2><p id="containers-title"></p></div><button type="button" class="close" data-close="containers-dialog" aria-label="Close">×</button></div>
     <p class="hint">Only containers in this Compose project are shown. Container actions do not change the repository watcher; a later deployment can restart containers. Inspect and logs may contain secrets.</p>
     <p id="containers-status" class="error" role="status"></p><div id="container-list"></div>
-    <div id="container-output" hidden><h3 id="container-output-title"></h3><pre id="container-output-content"></pre></div>
+    <div id="container-output" hidden>
+      <h3 id="container-output-title"></h3>
+      <div id="inspection-views" hidden>
+        <div class="inspection-switch" role="group" aria-label="Inspection view">
+          <button type="button" class="secondary" id="inspection-table-button" aria-pressed="true" aria-controls="inspection-table">Table view</button>
+          <button type="button" class="secondary" id="inspection-json-button" aria-pressed="false" aria-controls="container-output-content">Raw JSON</button>
+        </div>
+        <p class="hint">Read-only Docker inspection. Both views can contain secrets. Expand rows to see nested values.</p>
+        <div id="inspection-table" class="inspection-table-wrap"></div>
+      </div>
+      <pre id="container-output-content"></pre>
+    </div>
   </dialog>
   <dialog id="log-dialog">
     <div class="dialog-head"><div><div class="eyebrow">DEPLOYMENT OUTPUT</div><h2>Activity log</h2><p id="log-title"></p></div><button type="button" class="close" data-close="log-dialog" aria-label="Close">×</button></div>
