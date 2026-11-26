@@ -2,7 +2,7 @@
 
 A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. Add a repository, clone a branch, and deploy it manually once; Git Deploy then polls that branch and redeploys when it advances.
 
-> **Administrator access only.** Anyone with the deployment token can run arbitrary shell commands and control Docker on the host. Docker socket access is effectively host-root access. Do not expose this service directly to the internet or use it for untrusted users, repositories, or scripts. See [deployment and security](DEPLOYMENT.md) before installing.
+> **Administrator access only.** An authenticated administrator can run arbitrary shell commands and control Docker on the host. Docker socket access is effectively host-root access. Do not expose this service directly to the internet or use it for untrusted users, repositories, or scripts. See [deployment and security](DEPLOYMENT.md) before installing.
 
 ## What it does
 
@@ -25,7 +25,7 @@ Requirements: Node.js 20.6+, Git, Docker with the Compose plugin, and permission
 npm start
 ```
 
-Open <http://127.0.0.1:3000>, enter the token, and select **Add repository**. Supply the clone URL and branch, optionally add a shell script, and wait for cloning to finish. If needed, select **.env** on the repository card and save the project's environment file. Select **Deploy** to perform the first deployment; use **Activity** to inspect output. Thereafter the watcher checks for changes every 60 seconds by default.
+On the deployment host, run `node --env-file=.env auth-admin.js setup` in an interactive terminal and scan the QR code with an authenticator app (or enter the displayed key manually). After confirming the code, wait for the next code. Open <http://127.0.0.1:3000>, enter the token and current authenticator code, and select **Add repository**. Supply the clone URL and branch, optionally add a shell script, and wait for cloning to finish. If needed, select **.env** on the repository card and save the project's environment file. Select **Deploy** to perform the first deployment; use **Activity** to inspect output. Thereafter the watcher checks for changes every 60 seconds by default.
 
 For running the application itself in Docker, private repositories, configuration, troubleshooting, and security details, see [DEPLOYMENT.md](DEPLOYMENT.md).
 

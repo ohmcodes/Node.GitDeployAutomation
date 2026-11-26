@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
+const { verifyCode, readAuth, writeAuth } = require('./auth');
 
 const root = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const reposDir = path.join(root, 'repos');
@@ -27,6 +28,9 @@ if (!Array.isArray(repos)) throw new Error('Invalid state file');
 let activity = fs.existsSync(activityFile) ? JSON.parse(fs.readFileSync(activityFile, 'utf8')) : [];
 if (!Array.isArray(activity)) throw new Error('Invalid activity file');
 const active = new Set();
+const sessions = new Map();
+let loginFailures = [];
+const sessionLifetime = 8 * 60 * 60 * 1000;
 
 function save() {
   const tmp = `${stateFile}.tmp`;
@@ -394,13 +398,44 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (!pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' });
-  const authorization = req.headers.authorization || '';
-  const supplied = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  const expectedHash = crypto.createHash('sha256').update(token).digest();
-  const suppliedHash = crypto.createHash('sha256').update(supplied).digest();
-  if (!crypto.timingSafeEqual(expectedHash, suppliedHash)) return send(res, 401, { error: 'Unauthorized' });
-
   try {
+    if (pathname === '/api/login' && req.method === 'POST') {
+      const now = Date.now();
+      loginFailures = loginFailures.filter(time => now - time < 15 * 60 * 1000);
+      if (loginFailures.length >= 5) return send(res, 429, { error: 'Too many login attempts. Try again later.' });
+      loginFailures.push(now);
+      const input = await body(req, 8192);
+      const config = readAuth(root);
+      if (!config) return send(res, 503, { error: 'Authenticator is not configured. Complete setup on the deployment host.' });
+      const suppliedToken = typeof input.token === 'string' ? input.token : '';
+      const expectedHash = crypto.createHash('sha256').update(token).digest();
+      const suppliedHash = crypto.createHash('sha256').update(suppliedToken).digest();
+      const counter = verifyCode(config.secret, input.code, config.lastCounter, now);
+      if (!crypto.timingSafeEqual(expectedHash, suppliedHash) || counter === null) {
+        return send(res, 401, { error: 'Invalid token or authenticator code.' });
+      }
+      for (const [id, item] of sessions) if (item.expires <= now) sessions.delete(id);
+      if (sessions.size >= 100) return send(res, 429, { error: 'Too many active sessions. Try again later.' });
+      writeAuth(root, { ...config, lastCounter: counter });
+      loginFailures = [];
+      const sessionToken = crypto.randomBytes(32).toString('base64url');
+      const sessionHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+      sessions.set(sessionHash, { expires: now + sessionLifetime, generation: config.generation });
+      return send(res, 200, { session: sessionToken, expires: now + sessionLifetime });
+    }
+    const authorization = req.headers.authorization || '';
+    const supplied = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+    const sessionHash = crypto.createHash('sha256').update(supplied).digest('hex');
+    const currentSession = sessions.get(sessionHash);
+    const config = currentSession ? readAuth(root) : null;
+    if (!currentSession || currentSession.expires <= Date.now() || !config || currentSession.generation !== config.generation) {
+      if (currentSession) sessions.delete(sessionHash);
+      return send(res, 401, { error: 'Unauthorized' });
+    }
+    if (pathname === '/api/logout' && req.method === 'POST') {
+      sessions.delete(sessionHash);
+      return send(res, 200, { ok: true });
+    }
     if (pathname === '/api/repos' && req.method === 'GET') return send(res, 200, repos);
     if (pathname === '/api/activity' && req.method === 'GET') return send(res, 200, activity);
     if (pathname === '/api/metrics' && req.method === 'GET') return send(res, 200, await metrics());

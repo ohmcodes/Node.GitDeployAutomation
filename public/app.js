@@ -1,7 +1,8 @@
 'use strict';
 
 const $ = selector => document.querySelector(selector);
-let token = sessionStorage.getItem('deployToken') || '';
+sessionStorage.removeItem('deployToken');
+let token = sessionStorage.getItem('deploySession') || '';
 let repos = [];
 let filter = 'all';
 let selected = null;
@@ -221,10 +222,8 @@ async function refresh() {
   } catch (error) {
     if (session !== currentSession) return;
     if (error.message === 'Unauthorized') {
-      token = '';
-      sessionStorage.removeItem('deployToken');
-      $('#login-error').textContent = 'Invalid token. Please try again.';
-      if (!$('#login-dialog').open) $('#login-dialog').showModal();
+      clearSession();
+      $('#login-error').textContent = 'Session expired. Sign in again.';
     } else notice(`Could not refresh: ${error.message}`);
   } finally {
     refreshing = false;
@@ -371,19 +370,29 @@ async function refreshMetrics() {
 
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
-  token = $('#token').value;
-  const success = await refresh();
-  if (success) {
-    sessionStorage.setItem('deployToken', token);
+  $('#login-error').textContent = '';
+  const submit = $('#login-form button[type=submit]');
+  submit.disabled = true;
+  try {
+    const result = await api('/api/login', { method: 'POST', body: { token: $('#token').value, code: $('#otp').value } });
+    token = result.session;
+    sessionStorage.setItem('deploySession', token);
     $('#login-dialog').close();
     $('#token').value = '';
+    $('#otp').value = '';
+    await refresh();
     refreshMetrics();
-  } else if (token) $('#login-error').textContent = 'Could not connect to the server. Please try again.';
+  } catch (error) {
+    $('#login-error').textContent = error.message;
+    $('#otp').value = '';
+  } finally {
+    submit.disabled = false;
+  }
 });
-$('#logout').addEventListener('click', () => {
+function clearSession() {
   session++;
   token = '';
-  sessionStorage.removeItem('deployToken');
+  sessionStorage.removeItem('deploySession');
   repos = [];
   repoSnapshot = null;
   metricsData = null;
@@ -393,8 +402,25 @@ $('#logout').addEventListener('click', () => {
   $('#log-content').textContent = '';
   if ($('#env-dialog').open) $('#env-dialog').close();
   if ($('#page-dialog').open) $('#page-dialog').close();
+  for (const id of ['add-dialog', 'settings-dialog', 'log-dialog', 'key-dialog', 'delete-dialog']) {
+    if ($(`#${id}`).open) $(`#${id}`).close();
+  }
+  $('#edit-token').value = '';
+  $('#git-token').value = '';
+  $('#token').value = '';
+  $('#otp').value = '';
   render();
-  $('#login-dialog').showModal();
+  if (!$('#login-dialog').open) $('#login-dialog').showModal();
+}
+$('#logout').addEventListener('click', async () => {
+  try {
+    await api('/api/logout', { method: 'POST' });
+    clearSession();
+    $('#login-error').textContent = '';
+  } catch (error) {
+    clearSession();
+    $('#login-error').textContent = `Local session cleared, but server logout failed: ${error.message}`;
+  }
 });
 $('#login-dialog').addEventListener('cancel', event => event.preventDefault());
 $('#add-open').addEventListener('click', () => { $('#add-error').textContent = ''; $('#add-dialog').showModal(); });

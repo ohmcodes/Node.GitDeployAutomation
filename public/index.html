@@ -70,9 +70,10 @@
   </div>
   <dialog id="login-dialog">
     <form id="login-form">
-      <div class="dialog-head"><div><div class="eyebrow">WELCOME BACK</div><h2>Unlock workspace</h2><p>Enter the deployment token configured on your server.</p></div></div>
+      <div class="dialog-head"><div><div class="eyebrow">WELCOME BACK</div><h2>Unlock workspace</h2><p>Enter your deployment token and authenticator code.</p></div></div>
       <label for="token">Deployment token</label><input id="token" type="password" autocomplete="current-password" required>
-      <p class="hint">Your token stays in this browser session.</p>
+      <label for="otp">Authenticator code</label><input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p class="hint">A signed-in session lasts up to eight hours. Configure your authenticator on the deployment host before signing in.</p>
       <button class="primary wide" type="submit">Continue →</button><p id="login-error" class="error" role="alert"></p>
     </form>
   </dialog>

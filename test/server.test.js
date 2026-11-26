@@ -8,6 +8,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
+const { encodeSecret, totp, writeAuth } = require('../auth');
 
 const root = path.join(__dirname, '..');
 const token = 'example-test-password-only';
@@ -96,6 +97,10 @@ async function freePort() {
 
 test('authenticated clone, deployment, persistence, watcher and settings', { timeout: 30000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-deploy-test-'));
+  const dataDir = path.join(dir, 'data');
+  fs.mkdirSync(dataDir);
+  const secret = encodeSecret(Buffer.alloc(20, 7));
+  writeAuth(dataDir, { secret, generation: 'a'.repeat(32), lastCounter: -1 }, true);
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   const proc = path.join(dir, 'proc');
@@ -108,6 +113,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   const base = `http://127.0.0.1:${port}`;
   let child;
   let output = '';
+  let sessionToken = '';
   function start() {
     child = spawn(process.execPath, ['server.js'], {
       cwd: root,
@@ -127,7 +133,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   async function request(url, method = 'GET', body, authenticated = true) {
     return fetch(base + url, {
       method,
-      headers: { ...(authenticated ? { Authorization: ['Bearer', token].join(' ') } : {}), 'Content-Type': 'application/json' },
+      headers: { ...(authenticated ? { Authorization: ['Bearer', sessionToken].join(' ') } : {}), 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body)
     });
   }
@@ -145,6 +151,14 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   }
   start();
   await waitFor(async () => (await fetch(base)).ok);
+  assert.equal((await fetch(`${base}/api/repos`, { headers: { Authorization: `Bearer ${token}` } })).status, 401);
+  const login = async code => fetch(`${base}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, code }) });
+  let code = totp(secret, Math.floor(Date.now() / 30000) - 1);
+  let loginResponse = await login(code);
+  assert.equal(loginResponse.status, 200);
+  sessionToken = (await loginResponse.json()).session;
+  assert.equal((await login(code)).status, 401);
+  assert.equal((await login('000000')).status, 401);
   const icon = await fetch(`${base}/icon.svg`);
   assert.equal(icon.status, 200);
   assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
@@ -241,6 +255,12 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.ok((await (await request('/api/activity')).json()).some(entry => entry.repoId === id));
   await stop();
   start();
+  await waitFor(async () => (await fetch(base)).ok);
+  assert.equal((await request('/api/repos')).status, 401);
+  code = totp(secret, Math.floor(Date.now() / 30000));
+  loginResponse = await login(code);
+  assert.equal(loginResponse.status, 200);
+  sessionToken = (await loginResponse.json()).session;
   repo = await waitFor(async () => { const item = await current(id); return item && item.status === 'deployed' && item; });
   assert.equal(repo.commit, 'first-commit');
   assert.equal((await (await request(envUrl)).json()).content, envContent);
@@ -300,4 +320,6 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.equal(fs.existsSync(path.join(dir, 'data', 'credentials', `${sshRepo.id}.key`)), false);
   assert.equal((await request('/api/repos')).status, 200);
   assert.equal((await (await request('/api/repos')).json()).length, 0);
+  assert.equal((await request('/api/logout', 'POST')).status, 200);
+  assert.equal((await request('/api/repos')).status, 401);
 });
