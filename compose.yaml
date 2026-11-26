@@ -3,10 +3,11 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "0.0.0.0:3014:3014"
+      - "127.0.0.1:3014:3014"
     environment:
       DEPLOY_TOKEN: ${DEPLOY_TOKEN:?Set DEPLOY_TOKEN in your environment or .env file}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      PORT: "3014"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/git-deploy:/srv/git-deploy

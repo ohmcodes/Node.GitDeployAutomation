@@ -4,7 +4,7 @@
 
 Git Deploy is a single-administrator tool. The token grants the ability to clone repositories, execute custom scripts, build arbitrary Dockerfiles and control the Docker daemon. The Docker socket and the default container's root user give effectively unrestricted access to the host. Only connect trusted repositories and use scripts you have reviewed. A malicious repository or Compose file can compromise the host.
 
-The HTTP server has no built-in TLS, user accounts, rate limiting, or audit trail. The supplied Compose configuration binds its port to host loopback only. Access it locally, through an SSH tunnel, or through a properly secured HTTPS reverse proxy/VPN with additional access controls. Never publish port 3000 directly to the internet. Keep the token out of Git, logs and screenshots; use a long randomly generated token, protect the environment and rotate it by changing the value and restarting the service. Browser session storage holds the token until logout or the tab's session ends. Protect the browser and deployment host.
+The HTTP server has no built-in TLS, user accounts, rate limiting, or audit trail. The supplied Compose configuration binds its port to host loopback only. Access it locally, through an SSH tunnel, or through a properly secured HTTPS reverse proxy/VPN with additional access controls. Never publish the service port directly to the internet. Keep the token out of Git, logs and screenshots; use a long randomly generated token, protect the environment and rotate it by changing the value and restarting the service. Browser session storage holds the token until logout or the tab's session ends. Protect the browser and deployment host.
 
 State, scripts, Git URLs, and the most recent command output are stored in `DATA_DIR/state.json`; cloned source is under `DATA_DIR/repos`. Output may contain application secrets, including the last 100 log lines from each Compose service. Protect the data directory and backups, and avoid logging credentials. URL-embedded HTTPS credentials are rejected. The token is not passed to deployment child processes.
 
@@ -27,7 +27,7 @@ State, scripts, Git URLs, and the most recent command output are stored in `DATA
    docker compose logs --tail=100 git-deploy
    ```
 
-3. Open `http://127.0.0.1:3000` on that host. From another machine, an SSH tunnel is one option: `ssh -L 3000:127.0.0.1:3000 user@your-docker-host`, then open `http://127.0.0.1:3000` locally.
+3. Open `http://127.0.0.1:3014` on that host. From another machine, an SSH tunnel is one option: `ssh -L 3014:127.0.0.1:3014 user@your-docker-host`, then open `http://127.0.0.1:3014` locally.
 
 The container mounts `/var/run/docker.sock` and `/srv/git-deploy`. The **same absolute path** must be mounted inside the container and exist on the Docker daemon host: Compose bind mounts in managed projects are resolved by the host daemon, not inside Git Deploy. If you change the data path, change both sides of the volume mount and `DATA_DIR` together. This setup assumes a local Docker daemon and a Linux host.
 
