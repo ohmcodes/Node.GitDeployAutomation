@@ -8,7 +8,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
-const { encodeSecret, totp, writeAuth } = require('../auth');
+const { encodeSecret, totp, readAuth, writeAuth } = require('../auth');
 
 const root = path.join(__dirname, '..');
 const token = 'example-test-password-only';
@@ -40,6 +40,19 @@ class Stub {
       else if (a[0] == "ls-files") { if (File.Exists(Path.Combine(dir, "tracked-env"))) Console.WriteLine(".env"); }
       else return 1;
     } else if (name == "docker") {
+      if (a.Length > 4 && a[0] == "compose" && a[1] == "ps" && a[2] == "-a" && a[3] == "--format") {
+        string file = Path.Combine(dir, "containers.json");
+        Console.WriteLine(File.Exists(file) ? File.ReadAllText(file) : "[{\\"ID\\":\\"aaaaaaaaaaaa\\",\\"Name\\":\\"app\\",\\"Service\\":\\"web\\",\\"State\\":\\"running\\",\\"Status\\":\\"Up\\"}]");
+      }
+      else if (a[0] == "inspect") Console.WriteLine("[{\\"Name\\":\\"app\\",\\"HostConfig\\":{\\"RestartPolicy\\":{\\"Name\\":\\"always\\"}},\\"Mounts\\":[],\\"NetworkSettings\\":{}}]");
+      else if (a[0] == "logs") Console.WriteLine("container output");
+      else if (a[0] == "top") Console.WriteLine("PID COMMAND\\n1 app");
+      else if (a[0] == "stop" || a[0] == "kill" || a[0] == "start" || a[0] == "restart" || a[0] == "pause" || a[0] == "unpause") {
+        File.AppendAllText(Path.Combine(dir, "container-actions"), a[0] + " " + a[1] + "\\n");
+        if (File.Exists(Path.Combine(dir, "fail-container"))) { Console.Error.WriteLine("action failed"); return 1; }
+        Console.WriteLine(a[1]);
+      }
+      else {
       if (a.Length > 1 && a[1] == "down" && File.Exists(Path.Combine(dir, "fail-down"))) return 1;
       if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "fail-up"))) return 1;
       if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "expected-env")) &&
@@ -50,6 +63,7 @@ class Stub {
       else if (a.Length > 2 && a[1] == "ps" && a[2] == "-q") Console.WriteLine("container1");
       else if (a[0] == "stats") Console.WriteLine("{\\"Name\\":\\"app\\",\\"CPUPerc\\":\\"3%\\",\\"MemUsage\\":\\"1MiB / 2MiB\\",\\"MemPerc\\":\\"50%\\",\\"NetIO\\":\\"1B / 2B\\",\\"BlockIO\\":\\"3B / 4B\\"}");
       else Console.WriteLine("docker " + String.Join(" ", a));
+      }
     } else if (name == "sh") Console.WriteLine(a[a.Length - 1]);
     else if (name == "ssh-keygen") {
       string key = a[a.Length - 1]; File.WriteAllText(key, "private"); File.WriteAllText(key + ".pub", "ssh-ed25519 test-public-key");
@@ -75,6 +89,11 @@ case "$1" in
 esac
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
+if [ "$1" = compose ] && [ "$2" = ps ] && [ "$3" = -a ]; then if [ -f "$FAKE_DIR/containers.json" ]; then cat "$FAKE_DIR/containers.json"; else echo '[{"ID":"aaaaaaaaaaaa","Name":"app","Service":"web","State":"running","Status":"Up"}]'; fi; exit 0; fi
+if [ "$1" = inspect ]; then echo '[{"Name":"app","HostConfig":{"RestartPolicy":{"Name":"always"}},"Mounts":[],"NetworkSettings":{}}]'; exit 0; fi
+if [ "$1" = logs ]; then echo 'container output'; exit 0; fi
+if [ "$1" = top ]; then printf 'PID COMMAND\\n1 app\\n'; exit 0; fi
+case "$1" in stop|kill|start|restart|pause|unpause) echo "$1 $2" >> "$FAKE_DIR/container-actions"; if [ -f "$FAKE_DIR/fail-container" ]; then echo 'action failed' >&2; exit 1; fi; echo "$2"; exit 0;; esac
 if [ "$2" = down ] && [ -f "$FAKE_DIR/fail-down" ]; then exit 1; fi
 if [ "$2" = up ] && [ -f "$FAKE_DIR/fail-up" ]; then exit 1; fi
 if [ "$2" = up ] && [ -f "$FAKE_DIR/expected-env" ]; then cmp -s .env "$FAKE_DIR/expected-env" || exit 1; fi
@@ -130,7 +149,16 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
     }
   }
   t.after(async () => { await stop(); fs.rmSync(dir, { recursive: true, force: true }); });
-  async function request(url, method = 'GET', body, authenticated = true) {
+  async function request(url, method = 'GET', body, authenticated = true, actionCode = 'auto') {
+    const protectedAction = (method === 'POST' && (/\/deploy$/.test(url) || /\/containers\/[a-f0-9]+\/(stop|kill|restart|pause)$/i.test(url))) ||
+      (method === 'DELETE' && /^\/api\/repos\/[0-9a-f-]+$/i.test(url));
+    if (protectedAction && authenticated) {
+      if (actionCode === 'auto') {
+        writeAuth(dataDir, { ...readAuth(dataDir), lastCounter: -1 });
+        actionCode = totp(secret, Math.floor(Date.now() / 30000));
+      }
+      if (actionCode !== null) body = { ...body, authCode: actionCode };
+    }
     return fetch(base + url, {
       method,
       headers: { ...(authenticated ? { Authorization: ['Bearer', sessionToken].join(' ') } : {}), 'Content-Type': 'application/json' },
@@ -210,6 +238,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
     fs.unlinkSync(envPath);
   }
   fs.renameSync(`${envPath}.backup`, envPath);
+  assert.equal((await request(`/api/repos/${id}/deploy`, 'POST', undefined, true, null)).status, 403);
   assert.equal((await request(`/api/repos/${id}/deploy`, 'POST')).status, 202);
   let repo = await waitFor(async () => { const item = await current(id); return item.status === 'deployed' && item; });
   assert.equal(repo.commit, 'first-commit');
@@ -221,6 +250,33 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.doesNotMatch(JSON.stringify(repo), /test-secret-123/);
   assert.doesNotMatch(JSON.stringify(await (await request('/api/activity')).json()), /test-secret-123/);
   assert.ok(repo.lastPulled);
+  const containersUrl = `/api/repos/${id}/containers`;
+  assert.deepEqual(await (await request(containersUrl)).json(), [{ id: 'aaaaaaaaaaaa', name: 'app', service: 'web', state: 'running', status: 'Up' }]);
+  assert.equal((await request(`${containersUrl}/bbbbbbbbbbbb/stop`, 'POST')).status, 404);
+  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaab/stop`, 'POST')).status, 404);
+  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/logs`, 'GET', undefined, false)).status, 401);
+  assert.match((await (await request(`${containersUrl}/aaaaaaaaaaaa/logs`)).json()).output, /container output/);
+  assert.match((await (await request(`${containersUrl}/aaaaaaaaaaaa/processes`)).json()).output, /PID COMMAND/);
+  assert.equal((await (await request(`${containersUrl}/aaaaaaaaaaaa/inspect`)).json()).data.HostConfig.RestartPolicy.Name, 'always');
+  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST', undefined, true, null)).status, 403);
+  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST')).status, 200);
+  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST', undefined, true, totp(secret, readAuth(dataDir).lastCounter))).status, 403);
+  assert.equal(fs.readFileSync(path.join(dir, 'container-actions'), 'utf8').trim(), 'stop aaaaaaaaaaaa');
+  fs.unlinkSync(path.join(dir, 'container-actions'));
+  for (const command of ['stop', 'start', 'kill', 'restart', 'pause', 'resume']) assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/${command}`, 'POST')).status, 200);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'container-actions'), 'utf8').trim().split(/\r?\n/), ['stop', 'start', 'kill', 'restart', 'pause', 'unpause'].map(command => `${command} aaaaaaaaaaaa`));
+  assert.equal((await current(id)).watching, true);
+  fs.writeFileSync(path.join(dir, 'containers.json'), '{"ID":"aaaaaaaaaaaa","Name":"app","State":"running"}\n{"ID":"bbbbbbbbbbbb","Name":"worker","State":"exited"}\n');
+  assert.equal((await (await request(containersUrl)).json()).length, 2);
+  fs.writeFileSync(path.join(dir, 'containers.json'), '[{"Name":"missing ID"}]');
+  assert.equal((await request(containersUrl)).status, 500);
+  fs.unlinkSync(path.join(dir, 'containers.json'));
+  fs.writeFileSync(path.join(dir, 'fail-container'), '');
+  const failedAction = await request(`${containersUrl}/aaaaaaaaaaaa/restart`, 'POST');
+  assert.equal(failedAction.status, 500);
+  assert.match((await failedAction.json()).error, /action failed/);
+  fs.unlinkSync(path.join(dir, 'fail-container'));
+  assert.equal((await request(containersUrl)).status, 200);
   fs.writeFileSync(path.join(dir, 'ports.json'), JSON.stringify([
     { Service: 'web', State: 'running', Publishers: [{ URL: '0.0.0.0', PublishedPort: 8080, Protocol: 'tcp' }, { URL: '::', PublishedPort: 8443, Protocol: 'tcp' }, { URL: '0.0.0.0', PublishedPort: 9000, Protocol: 'udp' }] },
     { Service: 'db', State: 'exited', Publishers: [{ URL: '0.0.0.0', PublishedPort: 5432, Protocol: 'tcp' }] }
@@ -257,7 +313,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   start();
   await waitFor(async () => (await fetch(base)).ok);
   assert.equal((await request('/api/repos')).status, 401);
-  code = totp(secret, Math.floor(Date.now() / 30000));
+  code = totp(secret, Math.floor(Date.now() / 30000) + 1);
   loginResponse = await login(code);
   assert.equal(loginResponse.status, 200);
   sessionToken = (await loginResponse.json()).session;
@@ -281,6 +337,8 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.match(repo.message, /not a fast-forward/);
   assert.equal(repo.commit, 'second-commit');
   fs.writeFileSync(path.join(dir, 'fail-down'), '');
+  assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true }, true, null)).status, 403);
+  assert.ok(await current(id));
   assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true })).status, 500);
   assert.ok(await current(id));
   assert.match((await current(id)).message, /Removal failed/);

@@ -30,7 +30,39 @@ if (!Array.isArray(activity)) throw new Error('Invalid activity file');
 const active = new Set();
 const sessions = new Map();
 let loginFailures = [];
+let actionFailures = [];
 const sessionLifetime = 8 * 60 * 60 * 1000;
+
+function authorizeAction(res, currentSession, sessionHash, code) {
+  const now = Date.now();
+  const config = readAuth(root);
+  if (sessions.get(sessionHash) !== currentSession || currentSession.expires <= now || !config || currentSession.generation !== config.generation) {
+    send(res, 401, { error: 'Unauthorized' });
+    return false;
+  }
+  if (typeof code !== 'string' || !code) {
+    send(res, 403, { error: 'A fresh authenticator code is required for this action.' });
+    return false;
+  }
+  actionFailures = actionFailures.filter(time => now - time < 15 * 60 * 1000);
+  if (actionFailures.length >= 5) {
+    send(res, 429, { error: 'Too many authenticator attempts. Try again later.' });
+    return false;
+  }
+  const counter = verifyCode(config.secret, code, config.lastCounter, now);
+  if (counter === null) {
+    actionFailures.push(now);
+    send(res, 403, { error: 'Invalid or already used authenticator code. Wait for a new code and try again.' });
+    return false;
+  }
+  writeAuth(root, { ...config, lastCounter: counter });
+  actionFailures = [];
+  return true;
+}
+
+async function optionalBody(req) {
+  return (req.headers['content-length'] && req.headers['content-length'] !== '0') || req.headers['transfer-encoding'] ? body(req) : {};
+}
 
 function save() {
   const tmp = `${stateFile}.tmp`;
@@ -304,6 +336,30 @@ async function publishedPorts(repo) {
   return ports;
 }
 
+async function dockerOutput(repo, args) {
+  const env = { ...process.env };
+  delete env.DEPLOY_TOKEN;
+  return (await exec('docker', args, { cwd: location(repo), env, maxBuffer: 2 * 1024 * 1024 })).stdout;
+}
+
+async function managedContainers(repo) {
+  const output = (await dockerOutput(repo, ['compose', 'ps', '-a', '--format', 'json'])).trim();
+  if (!output) return [];
+  let items;
+  try {
+    items = output.startsWith('[') ? JSON.parse(output) : output.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    if (!Array.isArray(items)) throw new Error('Invalid response');
+  } catch {
+    throw new Error('Docker Compose returned invalid container data');
+  }
+  if (items.some(item => !item || typeof item.ID !== 'string' || !/^[a-f0-9]{12,64}$/i.test(item.ID))) {
+    throw new Error('Docker Compose returned invalid container data');
+  }
+  return items.map(item => ({
+    id: item.ID, name: item.Name, service: item.Service, state: item.State, status: item.Status
+  }));
+}
+
 let previousHostCpu;
 let previousRuntimeCpu;
 function hostMetrics() {
@@ -347,7 +403,7 @@ async function metrics() {
       const output = (await exec('docker', ['stats', '--no-stream', '--format', '{{json .}}', ...ids], options)).stdout.trim();
       for (const line of output.split('\n').filter(Boolean)) {
         const stat = JSON.parse(line);
-        result.containers.push({ repoId: repo.id, name: stat.Name, cpu: stat.CPUPerc, memory: stat.MemUsage, memoryPercent: stat.MemPerc, network: stat.NetIO, block: stat.BlockIO });
+        result.containers.push({ repoId: repo.id, id: stat.ID, name: stat.Name, cpu: stat.CPUPerc, memory: stat.MemUsage, memoryPercent: stat.MemPerc, network: stat.NetIO, block: stat.BlockIO });
       }
     } catch (error) {
       result.containers.push({ repoId: repo.id, error: `Container metrics unavailable: ${error.message}` });
@@ -439,6 +495,50 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/repos' && req.method === 'GET') return send(res, 200, repos);
     if (pathname === '/api/activity' && req.method === 'GET') return send(res, 200, activity);
     if (pathname === '/api/metrics' && req.method === 'GET') return send(res, 200, await metrics());
+    const containerMatch = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})\/containers(?:\/([a-f0-9]{12,64})\/(inspect|logs|processes|start|stop|kill|restart|pause|resume))?$/i);
+    if (containerMatch) {
+      const repo = repos.find(item => item.id === containerMatch[1]);
+      if (!repo) return send(res, 404, { error: 'Not found' });
+      if (!repo.lastDeployed && !repo.composeAttempted) return send(res, 409, { error: 'Repository has not been deployed' });
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      const action = containerMatch[3] && containerMatch[3].toLowerCase();
+      if ((!action && req.method !== 'GET') || (action && (['inspect', 'logs', 'processes'].includes(action) ? req.method !== 'GET' : req.method !== 'POST'))) return send(res, 404, { error: 'Not found' });
+      const input = ['stop', 'kill', 'restart', 'pause'].includes(action) ? await optionalBody(req) : {};
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      if (!repos.includes(repo)) return send(res, 404, { error: 'Not found' });
+      active.add(repo.id);
+      try {
+        const containers = await managedContainers(repo);
+        if (!action) return send(res, 200, containers);
+        const matched = containers.filter(item => item.id.toLowerCase() === containerMatch[2].toLowerCase());
+        if (matched.length !== 1) return send(res, 404, { error: 'Container is not part of this Compose project' });
+        const id = matched[0].id;
+        if (action === 'inspect') {
+          const output = await dockerOutput(repo, ['inspect', id]);
+          const inspection = JSON.parse(output);
+          if (!Array.isArray(inspection) || inspection.length !== 1) throw new Error('Docker returned invalid inspection data');
+          return send(res, 200, { data: inspection[0] });
+        }
+        if (action === 'logs') {
+          const env = { ...process.env };
+          delete env.DEPLOY_TOKEN;
+          const output = await exec('docker', ['logs', '--tail', '200', id], { cwd: location(repo), env, maxBuffer: 2 * 1024 * 1024 });
+          return send(res, 200, { output: `${output.stdout || ''}${output.stderr || ''}` });
+        }
+        if (action === 'processes') return send(res, 200, { output: await dockerOutput(repo, ['top', id]) });
+        if (['stop', 'kill', 'restart', 'pause'].includes(action) && !authorizeAction(res, currentSession, sessionHash, input.authCode)) return;
+        append(repo, `Container ${id}: ${action} requested. Watcher remains ${repo.watching ? 'enabled' : 'paused'}.\n`);
+        await dockerOutput(repo, [action === 'resume' ? 'unpause' : action, id]);
+        append(repo, `Container ${id}: ${action} completed.\n`);
+        return send(res, 200, { ok: true });
+      } catch (error) {
+        console.error('Container operation failed:', error.message);
+        if (action && !['inspect', 'logs', 'processes'].includes(action)) append(repo, `Container ${action} failed. See the management dialog for details.\n`);
+        return send(res, 500, { error: `Container operation failed: ${error.message}` });
+      } finally {
+        active.delete(repo.id);
+      }
+    }
     if (pathname === '/api/repos' && req.method === 'POST') {
       const input = await body(req);
       const branch = input.branch || 'main';
@@ -547,7 +647,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (match[2] === 'deploy' && req.method === 'POST') {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      const input = await optionalBody(req);
+      if (!repos.includes(repo)) return send(res, 404, { error: 'Not found' });
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
       if (!fs.existsSync(path.join(location(repo), '.git'))) return send(res, 409, { error: 'Clone failed; add the repository again' });
+      if (!authorizeAction(res, currentSession, sessionHash, input.authCode)) return;
       void deploy(repo);
       return send(res, 202, repo);
     }
@@ -571,7 +675,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (!match[2] && req.method === 'DELETE') {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
-      const input = req.headers['content-length'] || req.headers['transfer-encoding'] ? await body(req) : {};
+      const input = await optionalBody(req);
       if (!repos.includes(repo)) return send(res, 404, { error: 'Not found' });
       if ((input.containers !== undefined && typeof input.containers !== 'boolean') ||
           (input.images !== undefined && typeof input.images !== 'boolean') || (input.images && !input.containers)) {
@@ -581,6 +685,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 409, { error: 'Cannot run Compose cleanup without a cloned repository' });
       }
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      if (!authorizeAction(res, currentSession, sessionHash, input.authCode)) return;
       active.add(repo.id);
       try {
         if (input.containers) {

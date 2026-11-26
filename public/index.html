@@ -51,7 +51,7 @@
         </div>
         <section id="metrics-page" hidden>
           <div class="eyebrow">RESOURCE MONITOR</div><h1>System metrics<span>.</span></h1>
-          <p class="page-description">Current snapshots for the Git Deploy process, Docker host, and managed containers. Not historical or health monitoring.</p>
+          <p class="page-description">Current snapshots and recent browser-session graphs for the Git Deploy process, Docker host, and managed containers. Not persistent history or health monitoring.</p>
           <div id="metrics-detail" aria-live="polite">Loading metrics…</div>
         </section>
         <section id="activity-page" hidden><div class="section-title"><div><h1>Activity feed<span>.</span></h1><p>Recent output from all repositories. Logs may contain secrets.</p></div></div><label class="scroll-toggle"><input id="feed-autoscroll" type="checkbox" checked> Auto-scroll to latest</label><pre id="feed-content">No activity yet.</pre></section>
@@ -62,7 +62,7 @@
           <p>After deployment, <strong>Redeploy</strong> forces Compose to recreate services. <strong>View page</strong> uses the repository .env DOMAIN, or lets you choose a published TCP port using HTTP. Ensure the chosen service is a web page.</p>
           <h2>3. Existing deployments</h2><p>Git Deploy does not automatically attach to existing containers. Check the Compose project name, environment files, ports, and persistent paths before deploying from the new clone; otherwise a second project or conflicting services may be created.</p>
           <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>
-          <h2>Security and operations</h2><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
+          <h2>Security and operations</h2><p>Manual deploys, repository deletion, and container stop, kill, restart or pause require a fresh authenticator code. Codes cannot be reused, even after sign-in; wait for the next code. Automatic watcher deployments do not prompt.</p><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
         </section>
         <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW. <span>·</span> <a href="https://github.com/ohmcodes/Node.GitDeployAutomation" target="_blank" rel="noopener noreferrer">GITHUB SOURCE ↗</a></footer>
       </div>
@@ -75,6 +75,15 @@
       <label for="otp">Authenticator code</label><input id="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
       <p class="hint">A signed-in session lasts up to eight hours. Configure your authenticator on the deployment host before signing in.</p>
       <button class="primary wide" type="submit">Continue →</button><p id="login-error" class="error" role="alert"></p>
+    </form>
+  </dialog>
+  <dialog id="action-auth-dialog">
+    <form id="action-auth-form">
+      <div class="dialog-head"><div><div class="eyebrow">SECURITY CONFIRMATION</div><h2>Confirm sensitive action</h2><p id="action-auth-description"></p></div></div>
+      <label for="action-auth-code">Authenticator code</label>
+      <input id="action-auth-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p class="hint">Each code can be used only once, including at sign-in. Wait for a new code if you just used one.</p>
+      <div class="actions"><button type="button" class="secondary" id="action-auth-cancel">Cancel</button><button type="submit" class="primary">Confirm action</button></div>
     </form>
   </dialog>
   <dialog id="add-dialog">
@@ -116,6 +125,12 @@
     <div class="dialog-head"><div><div class="eyebrow">PROJECT PAGE</div><h2>View page</h2><p id="page-title"></p></div><button type="button" class="close" data-close="page-dialog" aria-label="Close">×</button></div>
     <div id="page-links" class="page-links" role="status"></div>
     <p class="hint">Published-port links use HTTP and this dashboard's hostname. Verify the service is a web page; firewall rules, loopback bindings, reverse proxies, and SSH tunnels may prevent access.</p>
+  </dialog>
+  <dialog id="containers-dialog">
+    <div class="dialog-head"><div><div class="eyebrow">COMPOSE CONTAINERS</div><h2>Manage containers</h2><p id="containers-title"></p></div><button type="button" class="close" data-close="containers-dialog" aria-label="Close">×</button></div>
+    <p class="hint">Only containers in this Compose project are shown. Container actions do not change the repository watcher; a later deployment can restart containers. Inspect and logs may contain secrets.</p>
+    <p id="containers-status" class="error" role="status"></p><div id="container-list"></div>
+    <div id="container-output" hidden><h3 id="container-output-title"></h3><pre id="container-output-content"></pre></div>
   </dialog>
   <dialog id="log-dialog">
     <div class="dialog-head"><div><div class="eyebrow">DEPLOYMENT OUTPUT</div><h2>Activity log</h2><p id="log-title"></p></div><button type="button" class="close" data-close="log-dialog" aria-label="Close">×</button></div>

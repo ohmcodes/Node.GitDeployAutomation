@@ -11,6 +11,8 @@ let keyRepoId = null;
 let envRepoId = null;
 let envRequest = 0;
 let pageRequest = 0;
+let containerRequest = 0;
+let containerRepoId = null;
 let page = 'dashboard';
 let refreshing = false;
 let metricsRefreshing = false;
@@ -19,6 +21,17 @@ let renderedAt = 0;
 let repoSnapshot = null;
 let metricsData = null;
 let metricsError = '';
+let actionAuthResolve = null;
+const metricHistory = new Map();
+const previousIo = new Map();
+
+function confirmWithAuthenticator(description) {
+  if (actionAuthResolve) return Promise.resolve(null);
+  $('#action-auth-description').textContent = description;
+  $('#action-auth-code').value = '';
+  $('#action-auth-dialog').showModal();
+  return new Promise(resolve => { actionAuthResolve = resolve; });
+}
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -133,8 +146,85 @@ async function showProjectPage(repo, name) {
   }
 }
 
+async function loadContainers() {
+  const requestId = ++containerRequest;
+  const currentSession = session;
+  const repoId = containerRepoId;
+  $('#containers-status').textContent = 'Loading containers…';
+  try {
+    const containers = await api(`/api/repos/${repoId}/containers`);
+    if (session !== currentSession || requestId !== containerRequest || !$('#containers-dialog').open) return;
+    const list = $('#container-list');
+    list.replaceChildren();
+    if (!containers.length) list.append(element('p', 'hint', 'No containers found for this project.'));
+    for (const container of containers) {
+      const card = element('div', 'container-control');
+      card.append(element('strong', '', container.name || container.id), element('p', 'hint', `${container.service || 'Service'} · ${container.status || container.state || 'unknown'}`));
+      const buttons = element('div', 'actions');
+      for (const [label, command] of [['Details / inspect', 'inspect'], ['Logs', 'logs'], ['Processes', 'processes']]) {
+        buttons.append(action(label, 'secondary', () => containerOperation(container, command)));
+      }
+      for (const command of ['start', 'stop', 'kill', 'restart', 'pause', 'resume']) {
+        const valid = command === 'start' ? ['created', 'exited', 'dead'].includes(container.state) :
+          command === 'resume' ? container.state === 'paused' :
+            command === 'pause' ? container.state === 'running' : ['running', 'paused', 'restarting'].includes(container.state);
+        buttons.append(action(command[0].toUpperCase() + command.slice(1), command === 'kill' ? 'remove' : 'secondary', () => containerOperation(container, command), !valid));
+      }
+      card.append(buttons);
+      list.append(card);
+    }
+    $('#containers-status').textContent = '';
+  } catch (error) {
+    if (session === currentSession && requestId === containerRequest && $('#containers-dialog').open) $('#containers-status').textContent = error.message;
+  }
+}
+
+async function containerOperation(container, command) {
+  const modifying = !['inspect', 'logs', 'processes'].includes(command);
+  if (modifying && !confirm(`${command.toUpperCase()} ${container.name || container.id}? This can interrupt the service. The repository watcher will remain unchanged and may redeploy it.`)) return;
+  const repoId = containerRepoId;
+  const currentSession = session;
+  let authCode;
+  if (['stop', 'kill', 'restart', 'pause'].includes(command)) {
+    authCode = await confirmWithAuthenticator(`${command.toUpperCase()} ${container.name || container.id}. The service may be interrupted.`);
+    if (!authCode || session !== currentSession || containerRepoId !== repoId || !$('#containers-dialog').open) return;
+  }
+  const requestId = ++containerRequest;
+  $('#containers-status').textContent = `${command} in progress…`;
+  try {
+    const result = await api(`/api/repos/${repoId}/containers/${container.id}/${command}`, { method: modifying ? 'POST' : 'GET', body: authCode ? { authCode } : undefined });
+    if (session !== currentSession || requestId !== containerRequest || !$('#containers-dialog').open) return;
+    if (modifying) {
+      await loadContainers();
+    } else {
+      $('#container-output-title').textContent = `${container.name || container.id} · ${command}`;
+      if (command === 'inspect') {
+        const info = result.data;
+        const details = {
+          restartPolicy: info.HostConfig && info.HostConfig.RestartPolicy,
+          mounts: info.Mounts,
+          networks: info.NetworkSettings && info.NetworkSettings.Networks
+        };
+        $('#container-output-content').textContent = `Read-only configuration:\n${JSON.stringify(details, null, 2)}\n\nFull inspection (may contain secrets):\n${JSON.stringify(info, null, 2)}`;
+      } else {
+        $('#container-output-content').textContent = result.output || 'No output.';
+      }
+      $('#container-output').hidden = false;
+      $('#containers-status').textContent = '';
+    }
+  } catch (error) {
+    if (session === currentSession && requestId === containerRequest && $('#containers-dialog').open) $('#containers-status').textContent = error.message;
+  }
+}
+
 async function change(repo, method, body, suffix = '') {
   try {
+    if (method === 'POST' && suffix === '/deploy') {
+      const currentSession = session;
+      const authCode = await confirmWithAuthenticator(`${repo.lastDeployed ? 'Redeploy' : 'Deploy'} ${repo.url}. Services may be recreated and repository scripts may run.`);
+      if (!authCode || session !== currentSession) return;
+      body = { ...body, authCode };
+    }
     await api(`/api/repos/${repo.id}${suffix}`, { method, body });
     notice('');
     await refresh();
@@ -186,6 +276,7 @@ function render() {
       ...(repo.authType === 'ssh' ? [action('SSH key', 'secondary', () => showKey(repo), busy)] : []),
       ...(repo.cloneFailed ? [action('Retry clone', 'secondary', () => change(repo, 'POST', undefined, '/clone'), busy)] : []),
       ...(repo.lastDeployed ? [action('View page ↗', 'secondary', () => showProjectPage(repo, name), busy)] : []),
+      ...(repo.lastDeployed || repo.composeAttempted ? [action('Containers', 'secondary', () => { containerRepoId = repo.id; $('#containers-title').textContent = name; $('#container-output').hidden = true; $('#container-output-content').textContent = ''; $('#container-list').replaceChildren(); $('#containers-dialog').showModal(); loadContainers(); }, busy)] : []),
       action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
       action('×', 'remove', () => { selected = repo; $('#delete-title').textContent = `Remove ${name}?`; $('#delete-form').reset(); $('#delete-images').disabled = true; $('#delete-dialog').showModal(); }, busy)
     );
@@ -245,6 +336,95 @@ function percent(value) {
 function containerPercent(value) {
   if (typeof value !== 'string' || !/^\d+(?:\.\d+)?%$/.test(value.trim())) return null;
   return Number.parseFloat(value);
+}
+
+function ioCounters(value) {
+  if (typeof value !== 'string') return null;
+  const parts = value.split('/');
+  if (parts.length !== 2) return null;
+  return parts.map(part => {
+    const match = part.trim().match(/^(\d+(?:\.\d+)?)\s*(B|kB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i);
+    if (!match) return null;
+    const units = { b: 1, kb: 1000, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1048576, gib: 1073741824, tib: 1099511627776 };
+    return Number(match[1]) * units[match[2].toLowerCase()];
+  });
+}
+
+function recordMetrics(data) {
+  const now = Date.now();
+  function record(key, value) {
+    const points = metricHistory.get(key) || [];
+    points.push({ time: now, value: Number.isFinite(value) ? value : null });
+    if (points.length > 120) points.shift();
+    metricHistory.set(key, points);
+  }
+  record('runtime-cpu', data.runtime.cpuPercent);
+  if (!data.host.error) {
+    record('host-cpu', data.host.cpuPercent);
+    record('host-memory', data.host.memoryTotal > 0 ? 100 * data.host.memoryUsed / data.host.memoryTotal : null);
+  } else {
+    record('host-cpu', null);
+    record('host-memory', null);
+  }
+  const present = new Set();
+  for (const container of data.containers) {
+    if (container.error || !container.id) continue;
+    const key = `${container.repoId}:${container.id}`;
+    present.add(key);
+    record(`${key}:cpu`, containerPercent(container.cpu));
+    record(`${key}:memory`, containerPercent(container.memoryPercent));
+    const current = { time: now, network: ioCounters(container.network), block: ioCounters(container.block) };
+    const previous = previousIo.get(key);
+    for (const type of ['network', 'block']) {
+      for (let index = 0; index < 2; index++) {
+        const value = current[type] && current[type][index];
+        const before = previous && previous[type] && previous[type][index];
+        const valid = value !== null && value !== undefined && before !== null && before !== undefined && now > previous.time && value >= before;
+        record(`${key}:${type}:${index}`, valid ? (value - before) / ((now - previous.time) / 1000) : null);
+      }
+    }
+    previousIo.set(key, current);
+  }
+  for (const key of previousIo.keys()) if (!present.has(key)) previousIo.delete(key);
+  for (const key of metricHistory.keys()) {
+    if (key.includes(':') && ![...present].some(id => key.startsWith(`${id}:`))) metricHistory.delete(key);
+  }
+}
+
+function metricGraph(key, label, unit) {
+  const points = metricHistory.get(key) || [];
+  const wrapper = element('div', 'history-graph');
+  const values = points.filter(point => point.value !== null);
+  wrapper.append(element('p', 'graph-title', `${label} · last ${points.length} samples`));
+  if (values.length < 2) {
+    wrapper.append(element('p', 'metric-note', 'Waiting for more samples…'));
+    return wrapper;
+  }
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 300 80');
+  svg.setAttribute('role', 'img');
+  const maximum = Math.max(...values.map(point => point.value), unit === '%' ? 100 : 1);
+  const latest = points[points.length - 1].value;
+  svg.setAttribute('aria-label', `${label}, latest ${latest === null ? 'unavailable' : unit === '%' ? percent(latest) : `${formatBytes(latest)}/s`}, graph maximum ${unit === '%' ? percent(maximum) : `${formatBytes(maximum)}/s`}`);
+  const first = points[0].time;
+  const duration = Math.max(1, points[points.length - 1].time - first);
+  let segment = [];
+  function drawSegment() {
+    if (segment.length) {
+      const line = document.createElementNS(ns, 'polyline');
+      line.setAttribute('points', segment.join(' '));
+      svg.append(line);
+      segment = [];
+    }
+  }
+  for (const point of points) {
+    if (point.value === null) drawSegment();
+    else segment.push(`${((point.time - first) / duration * 300).toFixed(1)},${(78 - point.value / maximum * 74).toFixed(1)}`);
+  }
+  drawSegment();
+  wrapper.append(svg, element('p', 'metric-note', `Scale: 0 to ${unit === '%' ? percent(maximum) : `${formatBytes(maximum)}/s`}. ${new Date(first).toLocaleTimeString()} – ${new Date(points[points.length - 1].time).toLocaleTimeString()}`));
+  return wrapper;
 }
 
 function metricBar(label, value, caption, max = 100) {
@@ -316,6 +496,7 @@ function renderMetrics() {
   const processPanel = element('section', 'metric-panel');
   processPanel.append(element('h2', '', 'Git Deploy process'), element('p', 'metric-note', 'CPU is relative to one core; values can exceed 100%.'));
   processPanel.append(metricBar('CPU · one core', runtime.cpuPercent, percent(runtime.cpuPercent), Math.max(100, runtime.cpuPercent || 0)));
+  processPanel.append(metricGraph('runtime-cpu', 'Process CPU', '%'));
   processPanel.append(element('p', 'metric-detail-line', `Resident memory: ${formatBytes(runtime.rss)} · Heap used: ${formatBytes(runtime.heapUsed)}`), element('p', 'metric-detail-line', `Uptime: ${Math.floor(runtime.uptime / 60)} min · Platform: ${runtime.platform}`));
   const hostPanel = element('section', 'metric-panel');
   hostPanel.append(element('h2', '', 'Docker host'), element('p', 'metric-note', 'CPU and memory of the configured host, not necessarily your desktop.'));
@@ -323,6 +504,7 @@ function renderMetrics() {
   else {
     const memoryPercent = host.memoryTotal > 0 ? 100 * host.memoryUsed / host.memoryTotal : null;
     hostPanel.append(metricBar('CPU', host.cpuPercent, percent(host.cpuPercent)), metricBar('Memory', memoryPercent, `${formatBytes(host.memoryUsed)} / ${formatBytes(host.memoryTotal)}${memoryPercent === null ? '' : ` · ${percent(memoryPercent)}`}`));
+    hostPanel.append(metricGraph('host-cpu', 'Host CPU', '%'), metricGraph('host-memory', 'Host memory', '%'));
   }
   grid.append(processPanel, hostPanel);
   detail.append(grid);
@@ -340,6 +522,13 @@ function renderMetrics() {
       panel.append(metricBar('CPU · one core', cpu, container.cpu || 'Unavailable', Math.max(100, cpu || 0)));
       panel.append(metricBar('Memory', memory, `${container.memory || 'Unavailable'}${container.memoryPercent ? ` · ${container.memoryPercent}` : ''}`));
       panel.append(element('p', 'metric-detail-line', `Network I/O: ${container.network || 'Unavailable'} · Block I/O: ${container.block || 'Unavailable'}`));
+      if (container.id) {
+        const key = `${container.repoId}:${container.id}`;
+        panel.append(metricGraph(`${key}:cpu`, 'Container CPU', '%'), metricGraph(`${key}:memory`, 'Container memory', '%'));
+        for (const [type, index, label] of [['network', 0, 'Network received'], ['network', 1, 'Network sent'], ['block', 0, 'Disk read'], ['block', 1, 'Disk written']]) {
+          panel.append(metricGraph(`${key}:${type}:${index}`, label, 'bytes/s'));
+        }
+      }
     }
     containerSection.append(panel);
   }
@@ -356,11 +545,18 @@ async function refreshMetrics() {
     if (session !== currentSession) return;
     metricsData = data;
     metricsError = '';
+    recordMetrics(data);
     renderMetrics();
   } catch (error) {
     if (session === currentSession) {
       metricsData = null;
       metricsError = error.message;
+      previousIo.clear();
+      const time = Date.now();
+      for (const points of metricHistory.values()) {
+        points.push({ time, value: null });
+        if (points.length > 120) points.shift();
+      }
       renderMetrics();
     }
   } finally {
@@ -397,11 +593,15 @@ function clearSession() {
   repoSnapshot = null;
   metricsData = null;
   metricsError = '';
+  metricHistory.clear();
+  previousIo.clear();
   renderMetrics();
   $('#feed-content').textContent = 'No activity yet.';
   $('#log-content').textContent = '';
   if ($('#env-dialog').open) $('#env-dialog').close();
   if ($('#page-dialog').open) $('#page-dialog').close();
+  if ($('#containers-dialog').open) $('#containers-dialog').close();
+  if ($('#action-auth-dialog').open) $('#action-auth-dialog').close();
   for (const id of ['add-dialog', 'settings-dialog', 'log-dialog', 'key-dialog', 'delete-dialog']) {
     if ($(`#${id}`).open) $(`#${id}`).close();
   }
@@ -423,6 +623,19 @@ $('#logout').addEventListener('click', async () => {
   }
 });
 $('#login-dialog').addEventListener('cancel', event => event.preventDefault());
+$('#action-auth-form').addEventListener('submit', event => {
+  event.preventDefault();
+  $('#action-auth-dialog').close('confirm');
+});
+$('#action-auth-cancel').addEventListener('click', () => $('#action-auth-dialog').close());
+$('#action-auth-dialog').addEventListener('close', () => {
+  const code = $('#action-auth-dialog').returnValue === 'confirm' ? $('#action-auth-code').value : null;
+  $('#action-auth-dialog').returnValue = '';
+  $('#action-auth-code').value = '';
+  const resolve = actionAuthResolve;
+  actionAuthResolve = null;
+  if (resolve) resolve(code);
+});
 $('#add-open').addEventListener('click', () => { $('#add-error').textContent = ''; $('#add-dialog').showModal(); });
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 $('#env-dialog').addEventListener('close', () => {
@@ -433,6 +646,12 @@ $('#env-dialog').addEventListener('close', () => {
 $('#page-dialog').addEventListener('close', () => {
   pageRequest++;
   $('#page-links').replaceChildren();
+});
+$('#containers-dialog').addEventListener('close', () => {
+  containerRequest++;
+  containerRepoId = null;
+  $('#container-list').replaceChildren();
+  $('#container-output-content').textContent = '';
 });
 $('#env-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -490,8 +709,13 @@ $('#delete-containers').addEventListener('change', () => {
 });
 $('#delete-form').addEventListener('submit', async event => {
   event.preventDefault();
+  const repo = selected;
+  const currentSession = session;
+  const options = { containers: $('#delete-containers').checked, images: $('#delete-images').checked };
+  const authCode = await confirmWithAuthenticator(`Delete ${repo.url}${options.containers ? ', stop its Compose services' : ''}${options.images ? ', and remove local images' : ''}.`);
+  if (!authCode || session !== currentSession || selected !== repo || !$('#delete-dialog').open) return;
   $('#delete-dialog').close();
-  await change(selected, 'DELETE', { containers: $('#delete-containers').checked, images: $('#delete-images').checked });
+  await change(repo, 'DELETE', { ...options, authCode });
   refreshMetrics();
 });
 $('#clone-key').addEventListener('click', async () => {

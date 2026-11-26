@@ -20,6 +20,8 @@ test('login fails closed, rate limits, and invalidates sessions on reset', { tim
   const url = `http://127.0.0.1:${port}`;
   const secret = encodeSecret(Buffer.alloc(20, 9));
   const state = { secret, generation: 'b'.repeat(32), lastCounter: -1 };
+  const repoId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify([{ id: repoId, url: 'https://example.com/repo.git', watching: false, status: 'ready' }]));
   let child;
   async function stop() {
     if (child && child.exitCode === null) {
@@ -63,6 +65,15 @@ test('login fails closed, rate limits, and invalidates sessions on reset', { tim
   const secondLogin = await post({ token: 'test-deployment-token', code: nextCode });
   assert.equal(secondLogin.status, 200);
   const secondSession = (await secondLogin.json()).session;
+  const remove = (session, authCode) => fetch(`${url}/api/repos/${repoId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${session}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ authCode })
+  });
+  assert.equal((await remove('invalid-session', 'bad')).status, 401);
+  for (let count = 0; count < 5; count++) assert.equal((await remove(secondSession, 'bad')).status, 403);
+  assert.equal((await remove(secondSession, nextCode)).status, 429);
+  assert.equal((await (await fetch(`${url}/api/repos`, { headers: { Authorization: `Bearer ${secondSession}` } })).json()).length, 1);
   writeAuth(dir, { ...state, generation: 'c'.repeat(32) });
   assert.equal((await fetch(`${url}/api/repos`, { headers: { Authorization: `Bearer ${secondSession}` } })).status, 401);
   await stop();

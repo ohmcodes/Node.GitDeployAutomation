@@ -13,6 +13,8 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 - **View page** opens a chooser using the repository `.env` `DOMAIN`, or its published TCP ports if no domain is set.
 - Poll deployed repositories for changes, deploy fast-forward updates, and pause or resume watching. A repository is not automatically deployed until its first manual deployment succeeds.
 - Show Git Deploy process and configured Docker host summaries on the dashboard, per-container summaries on repository cards, and detailed bars for all three on the metrics page; persist deployment state and recent activity across restarts.
+- Graph recent CPU, memory, container network and block I/O rates in the current browser session. Manage containers belonging to deployed repositories, including lifecycle actions, logs, inspect and process lists.
+- Require a fresh authenticator code for manual deployments, repository deletion, and container stop, kill, restart and pause. Codes cannot be reused, including immediately after login.
 - Use a managed HTTPS token or generate an SSH deploy key for a private repository.
 - Edit a repository's root `.env` after cloning, before or between deployments.
 - Remove a repository and its clone, with optional Compose service and locally built image cleanup.
