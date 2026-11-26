@@ -6,7 +6,7 @@ services:
     container_name: gitdeploy
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3014:3014"
+      - "3014:3014"
     env_file:
       - .env
     environment:
