@@ -22,6 +22,7 @@ let repoSnapshot = null;
 let actionAuthResolve = null;
 let loginMethod = null;
 const expandedRepos = new Set();
+const openRepoMenus = new Set();
 
 function confirmWithAuthenticator(description) {
   if (loginMethod === 'token') {
@@ -173,6 +174,7 @@ function render() {
   const shown = repos.filter(repo => filter === 'all' || (filter === 'watching' ? repo.watching : filter === 'deployed' ? repo.lastDeployed : repo.status === 'error'));
   const list = $('#repos');
   const focusedToggle = list.contains(document.activeElement) && document.activeElement.dataset.repoToggle;
+  const focusedAction = list.contains(document.activeElement) && document.activeElement.dataset.repoAction;
   list.replaceChildren();
   if (!shown.length) {
     const empty = element('div', 'empty');
@@ -220,8 +222,20 @@ function render() {
     link.rel = 'noopener noreferrer';
     info.append(link, element('p', 'repo-meta', repo.lastDeployed ? `Deployed ${new Date(repo.lastDeployed).toLocaleString()}` : 'Not deployed yet'));
     if (repo.message) info.append(element('p', 'error', repo.message));
-    const buttons = element('div', 'actions');
-    buttons.append(
+    const buttons = element('div', 'repo-actions');
+    const more = document.createElement('details');
+    more.className = 'repo-more';
+    more.open = openRepoMenus.has(repo.id);
+    const moreSummary = element('summary', 'secondary', 'More actions');
+    moreSummary.dataset.repoAction = `${repo.id}:menu`;
+    more.append(moreSummary);
+    more.addEventListener('toggle', () => {
+      if (!more.isConnected) return;
+      if (more.open) openRepoMenus.add(repo.id);
+      else openRepoMenus.delete(repo.id);
+    });
+    const extra = element('div', 'repo-more-list');
+    extra.append(
       action('Activity', 'secondary', () => { logRepoId = repo.id; $('#log-title').textContent = name; updateLog($('#log-content'), repo.log || 'No activity yet.', true); $('#log-dialog').showModal(); $('#log-content').scrollTop = $('#log-content').scrollHeight; }),
       action('Settings', 'secondary', () => { selected = repo; $('#settings-error').textContent = ''; $('#edit-script').value = repo.script; $('#edit-username').value = ''; $('#edit-token').value = ''; $('#edit-token-fields').hidden = repo.authType !== 'token'; $('#settings-dialog').showModal(); }, busy),
       action('.env', 'secondary', () => showEnv(repo, name), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
@@ -230,14 +244,25 @@ function render() {
       ...(repo.cloneFailed ? [action('Retry clone', 'secondary', () => change(repo, 'POST', undefined, '/clone'), busy)] : []),
       ...(repo.lastDeployed ? [action('View page ↗', 'secondary', () => showProjectPage(repo, name), busy)] : []),
       ...(repo.lastDeployed || repo.composeAttempted ? [action('Containers', 'secondary', () => openContainers(repo, name), busy)] : []),
-      action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
-      action('×', 'remove', () => { selected = repo; $('#delete-title').textContent = `Remove ${name}?`; $('#delete-form').reset(); $('#delete-images').disabled = true; $('#delete-dialog').showModal(); }, busy)
+      action('Remove', 'secondary repo-remove', () => { selected = repo; $('#delete-title').textContent = `Remove ${name}?`; $('#delete-form').reset(); $('#delete-images').disabled = true; $('#delete-dialog').showModal(); }, busy)
     );
-    buttons.lastChild.setAttribute('aria-label', `Remove ${name}`);
+    extra.lastChild.setAttribute('aria-label', `Remove ${name}`);
+    for (const button of extra.querySelectorAll('button')) button.dataset.repoAction = `${repo.id}:${button.textContent}`;
+    more.append(extra);
+    more.addEventListener('click', event => {
+      if (event.target.closest('button')) more.open = false;
+    });
+    const deployButton = action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed);
+    deployButton.dataset.repoAction = `${repo.id}:deploy`;
+    buttons.append(deployButton, more);
     details.append(info, buttons);
     card.append(header, details);
     list.append(card);
     if (focusedToggle === repo.id) toggle.focus();
+    if (focusedAction) {
+      const previousFocus = Array.from(card.querySelectorAll('[data-repo-action]')).find(item => item.dataset.repoAction === focusedAction);
+      if (previousFocus && !previousFocus.disabled) previousFocus.focus();
+    }
   }
   renderRepoMetrics();
 }
@@ -254,6 +279,7 @@ async function refresh() {
     repos = result;
     const repoIds = new Set(repos.map(repo => repo.id));
     for (const id of expandedRepos) if (!repoIds.has(id)) expandedRepos.delete(id);
+    for (const id of openRepoMenus) if (!repoIds.has(id)) openRepoMenus.delete(id);
     if (snapshot !== repoSnapshot || recentExpired) render();
     repoSnapshot = snapshot;
     if ($('#log-dialog').open) {
@@ -332,6 +358,7 @@ function clearSession() {
   session++;
   token = '';
   expandedRepos.clear();
+  openRepoMenus.clear();
   sessionStorage.removeItem('deploySession');
   repos = [];
   repoSnapshot = null;
@@ -424,6 +451,10 @@ document.querySelectorAll('.filter').forEach(button => button.addEventListener('
     item.setAttribute('aria-pressed', String(active));
   });
   render();
+}));
+document.querySelectorAll('[data-repo-columns]').forEach(button => button.addEventListener('click', () => {
+  $('#repos').style.setProperty('--columns', button.dataset.repoColumns);
+  document.querySelectorAll('[data-repo-columns]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
 }));
 const savedTheme = localStorage.getItem('theme');
 $('#theme').value = ['dark', 'futuristic', 'midnight', 'light', 'sand'].includes(savedTheme) ? savedTheme : 'dark';

@@ -7,6 +7,7 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 ## What it does
 
 - Light and dark themes, repository filters and status colors, collapsible repository cards, a developer guide, and a centralized activity feed. Cards start collapsed and retain their state during navigation, filtering, and automatic updates until the page is reloaded or the user logs out.
+- Expand a repository card for Deploy or Redeploy; other operations, including activity, settings, environment editing, and removal, are under **More actions**.
 - Clone HTTPS or `ssh://` repositories, select a branch (default `main`), and manually deploy.
 - For a deployment, run `git pull --ff-only origin <branch>`, `docker compose up -d --build`, an optional custom shell script, `docker compose ps`, and `docker compose logs --tail=100` (all services).
 - After the first successful deployment, **Redeploy** additionally passes `--force-recreate`; automatic updates retain the normal Compose behavior.
@@ -14,6 +15,7 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 - Poll deployed repositories for changes, deploy fast-forward updates, and pause or resume watching. A repository is not automatically deployed until its first manual deployment succeeds.
 - Show Git Deploy process and configured Docker host summaries on the dashboard, per-container summaries on repository cards (including when collapsed), and detailed bars for all three on the metrics page; persist deployment state and recent activity across restarts.
 - Graph recent CPU, memory, container network and block I/O rates in the current browser session. Manage containers belonging to deployed repositories, including lifecycle actions, logs, inspect and process lists.
+- Choose one, two, or three repository, container-card, and graph columns. Container metrics cards start collapsed; expand them for details and use the graph buttons to show or hide CPU, memory, network, or disk I/O graphs. These display choices last until the page is reloaded.
 - Require a fresh authenticator code for manual deployments, repository deletion, and container stop, kill, restart and pause. Codes cannot be reused, including immediately after login.
 - Use a managed HTTPS token or generate an SSH deploy key for a private repository.
 - Edit a repository's root `.env` after cloning, before or between deployments.
@@ -46,7 +48,7 @@ Requirements: Node.js 20.6+, Git, Docker with the Compose plugin, and permission
 npm start
 ```
 
-Open <http://127.0.0.1:3000> and unlock the workspace with the deployment token. On the deployment host, run `node --env-file=.env auth-admin.js setup` in an interactive terminal and scan the QR code with an authenticator app (or enter the displayed key manually). Enrollment invalidates token-only sessions; after confirming the code, wait for the next code and sign in using the authenticator code alone. Select **Add repository**, supply the clone URL and branch, optionally add a shell script, and wait for cloning to finish. If needed, select **.env** on the repository card and save the project's environment file. Select **Deploy** and enter a fresh authenticator code to perform the first deployment; use **Activity** to inspect output. Thereafter the watcher checks for changes every 60 seconds by default.
+Open <http://127.0.0.1:3000> and unlock the workspace with the deployment token. On the deployment host, run `node --env-file=.env auth-admin.js setup` in an interactive terminal and scan the QR code with an authenticator app (or enter the displayed key manually). Enrollment invalidates token-only sessions; after confirming the code, wait for the next code and sign in using the authenticator code alone. Select **Add repository**, supply the clone URL and branch, optionally add a shell script, and wait for cloning to finish. Expand the repository card and, if needed, select **More actions → .env** to save the project's environment file. Select **Deploy** and enter a fresh authenticator code to perform the first deployment; use **More actions → Activity** to inspect output. Thereafter the watcher checks for changes every 60 seconds by default.
 
 Before enrollment, token-only login grants administrative access, but manual deployment, repository deletion, and protected container actions are blocked. After enrollment, authenticator-only login is **single-factor authentication**, not two-factor authentication; protect the authenticator and use additional access controls such as a VPN or HTTPS proxy. See [deployment and security](DEPLOYMENT.md).
 

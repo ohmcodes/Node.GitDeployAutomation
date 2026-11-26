@@ -47,18 +47,43 @@
           <button type="button" class="filter" data-filter="deployed" aria-pressed="false">Deployed</button>
           <button type="button" class="filter" data-filter="error" aria-pressed="false">Needs attention</button>
         </div>
+        <div class="display-controls" role="group" aria-label="Repository columns">
+          <span>Repository columns</span>
+          <button type="button" class="secondary" data-repo-columns="1" aria-pressed="true">1</button>
+          <button type="button" class="secondary" data-repo-columns="2" aria-pressed="false">2</button>
+          <button type="button" class="secondary" data-repo-columns="3" aria-pressed="false">3</button>
+        </div>
         <div id="repos" class="repo-list"></div>
         </div>
         <section id="metrics-page" hidden>
           <div class="eyebrow">RESOURCE MONITOR</div><h1>System metrics<span>.</span></h1>
           <p class="page-description">Current snapshots and recent browser-session graphs for the Git Deploy process, Docker host, and managed containers. Not persistent history or health monitoring.</p>
+          <div class="display-controls" role="group" aria-label="Visible graph metrics">
+            <span>Graphs</span>
+            <button type="button" class="secondary" data-graph-metric="cpu" aria-pressed="true">CPU</button>
+            <button type="button" class="secondary" data-graph-metric="memory" aria-pressed="true">Memory</button>
+            <button type="button" class="secondary" data-graph-metric="network" aria-pressed="true">Network</button>
+            <button type="button" class="secondary" data-graph-metric="block" aria-pressed="true">Disk I/O</button>
+          </div>
+          <div class="display-controls" role="group" aria-label="Container card columns">
+            <span>Container columns</span>
+            <button type="button" class="secondary" data-container-columns="1" aria-pressed="true">1</button>
+            <button type="button" class="secondary" data-container-columns="2" aria-pressed="false">2</button>
+            <button type="button" class="secondary" data-container-columns="3" aria-pressed="false">3</button>
+          </div>
+          <div class="display-controls" role="group" aria-label="Graph columns">
+            <span>Graph columns</span>
+            <button type="button" class="secondary" data-graph-columns="1" aria-pressed="true">1</button>
+            <button type="button" class="secondary" data-graph-columns="2" aria-pressed="false">2</button>
+            <button type="button" class="secondary" data-graph-columns="3" aria-pressed="false">3</button>
+          </div>
           <div id="metrics-detail" aria-live="polite">Loading metrics…</div>
         </section>
         <section id="activity-page" hidden><div class="section-title"><div><h1>Activity feed<span>.</span></h1><p>Recent output from all repositories. Logs may contain secrets.</p></div></div><label class="scroll-toggle"><input id="feed-autoscroll" type="checkbox" checked> Auto-scroll to latest</label><pre id="feed-content">No activity yet.</pre></section>
         <section id="help-page" class="guide" hidden>
           <div class="eyebrow">DEVELOPER GUIDE</div><h1>How to deploy<span>.</span></h1>
           <h2>1. Connect a repository</h2><p>Select <strong>Add repository</strong>, enter its HTTPS or ssh:// URL and branch, and choose authentication. For generated SSH keys, add the displayed public key as a read-only deploy key and configure verified host keys in the Git Deploy runtime before cloning.</p>
-          <h2>2. Configure and deploy</h2><p>After cloning, select <strong>.env</strong> on the repository card if the project needs environment variables, then select <strong>Deploy</strong>. Git Deploy pulls the branch and runs Docker Compose from its own clone. A successful first deployment enables polling; use Pause to stop checks. Inspect Activity after errors.</p>
+          <h2>2. Configure and deploy</h2><p>Expand the repository card and open <strong>More actions</strong> to find <strong>.env</strong>, settings, activity, and watcher controls. Select <strong>Deploy</strong> to pull the branch and run Docker Compose from its own clone. A successful first deployment enables polling; use Pause to stop checks. Inspect Activity after errors.</p>
           <p>After deployment, <strong>Redeploy</strong> forces Compose to recreate services. <strong>View page</strong> uses the repository .env DOMAIN, or lets you choose a published TCP port using HTTP. Ensure the chosen service is a web page.</p>
           <h2>3. Existing deployments</h2><p>Git Deploy does not automatically attach to existing containers. Check the Compose project name, environment files, ports, and persistent paths before deploying from the new clone; otherwise a second project or conflicting services may be created.</p>
           <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>

@@ -4,6 +4,29 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
   let metricsError = '';
   const metricHistory = new Map();
   const previousIo = new Map();
+  const expandedContainers = new Set();
+  const visibleGraphs = new Set(['cpu', 'memory', 'network', 'block']);
+  let containerColumns = 1;
+  let graphColumns = 1;
+
+  document.querySelectorAll('[data-graph-metric]').forEach(button => button.addEventListener('click', () => {
+    const metric = button.dataset.graphMetric;
+    if (visibleGraphs.has(metric)) visibleGraphs.delete(metric);
+    else visibleGraphs.add(metric);
+    button.setAttribute('aria-pressed', String(visibleGraphs.has(metric)));
+    renderMetrics();
+  }));
+  for (const [attribute, update] of [
+    ['containerColumns', value => { containerColumns = value; }],
+    ['graphColumns', value => { graphColumns = value; }]
+  ]) {
+    const buttons = document.querySelectorAll(attribute === 'containerColumns' ? '[data-container-columns]' : '[data-graph-columns]');
+    buttons.forEach(button => button.addEventListener('click', () => {
+      update(Number(button.dataset[attribute]));
+      buttons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      renderMetrics();
+    }));
+  }
 
   function formatBytes(bytes) {
     if (!Number.isFinite(bytes)) return 'Unavailable';
@@ -132,6 +155,15 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
     return row;
   }
 
+  function graphGroup(graphs) {
+    const group = element('div', 'graph-grid');
+    group.style.setProperty('--columns', graphColumns);
+    for (const [type, key, label, unit] of graphs) {
+      if (visibleGraphs.has(type)) group.append(metricGraph(key, label, unit));
+    }
+    return group;
+  }
+
   function renderRepoMetrics() {
     document.querySelectorAll('.repo-metrics').forEach(node => {
       node.replaceChildren();
@@ -159,6 +191,7 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
     const summary = $('#metrics-summary');
     const detail = $('#metrics-detail');
     const focusedSummary = Array.from(summary.querySelectorAll('.summary-card')).indexOf(document.activeElement);
+    const focusedContainer = detail.contains(document.activeElement) && document.activeElement.dataset.containerToggle;
     summary.replaceChildren();
     detail.replaceChildren();
     if (metricsError || !metricsData) {
@@ -180,7 +213,7 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
     const processPanel = element('section', 'metric-panel');
     processPanel.append(element('h2', '', 'Git Deploy process'), element('p', 'metric-note', 'CPU is relative to one core; values can exceed 100%.'));
     processPanel.append(metricBar('CPU · one core', runtime.cpuPercent, percent(runtime.cpuPercent), Math.max(100, runtime.cpuPercent || 0)));
-    processPanel.append(metricGraph('runtime-cpu', 'Process CPU', '%'));
+    processPanel.append(graphGroup([['cpu', 'runtime-cpu', 'Process CPU', '%']]));
     processPanel.append(element('p', 'metric-detail-line', `Resident memory: ${formatBytes(runtime.rss)} · Heap used: ${formatBytes(runtime.heapUsed)}`), element('p', 'metric-detail-line', `Uptime: ${Math.floor(runtime.uptime / 60)} min · Platform: ${runtime.platform}`));
     const hostPanel = element('section', 'metric-panel');
     hostPanel.append(element('h2', '', 'Docker host'), element('p', 'metric-note', 'CPU and memory of the configured host, not necessarily your desktop.'));
@@ -188,35 +221,67 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
     else {
       const memoryPercent = host.memoryTotal > 0 ? 100 * host.memoryUsed / host.memoryTotal : null;
       hostPanel.append(metricBar('CPU', host.cpuPercent, percent(host.cpuPercent)), metricBar('Memory', memoryPercent, `${formatBytes(host.memoryUsed)} / ${formatBytes(host.memoryTotal)}${memoryPercent === null ? '' : ` · ${percent(memoryPercent)}`}`));
-      hostPanel.append(metricGraph('host-cpu', 'Host CPU', '%'), metricGraph('host-memory', 'Host memory', '%'));
+      hostPanel.append(graphGroup([['cpu', 'host-cpu', 'Host CPU', '%'], ['memory', 'host-memory', 'Host memory', '%']]));
     }
     grid.append(processPanel, hostPanel);
     detail.append(grid);
     const containerSection = element('section', 'container-section');
     containerSection.append(element('h2', '', 'Managed containers'), element('p', 'metric-note', 'Running containers reported by managed Compose projects. CPU is relative to one core and may exceed 100%.'));
     if (!containers.length) containerSection.append(element('p', 'metric-unavailable', 'No running managed containers reported.'));
+    const containerGrid = element('div', 'container-grid');
+    containerGrid.style.setProperty('--columns', containerColumns);
     for (const container of containers) {
       const repo = getRepos().find(item => item.id === container.repoId);
       const panel = element('article', 'metric-panel container-panel');
-      panel.append(element('h3', '', container.name || 'Container metrics unavailable'), element('p', 'metric-note', repo ? repo.url : `Repository ${container.repoId}`));
-      if (container.error) panel.append(element('p', 'metric-unavailable', container.error));
+      const key = `${container.repoId}:${container.id || 'error'}`;
+      const name = container.name || 'Container metrics unavailable';
+      const heading = element('div', 'container-panel-heading');
+      const title = element('div', 'container-panel-title');
+      title.append(element('h3', '', name), element('p', 'metric-note', repo ? repo.url : `Repository ${container.repoId}`));
+      if (container.error) title.append(element('p', 'metric-unavailable', container.error));
+      else title.append(element('p', 'metric-note', `CPU ${container.cpu || 'unavailable'} · Memory ${container.memoryPercent || 'unavailable'}`));
+      const content = element('div', 'container-panel-details');
+      content.id = `container-metrics-${container.repoId}-${container.id || 'error'}`;
+      content.hidden = !expandedContainers.has(key);
+      const toggle = action('', 'secondary', () => {
+        content.hidden = !content.hidden;
+        if (content.hidden) expandedContainers.delete(key);
+        else expandedContainers.add(key);
+        updateToggle();
+      });
+      toggle.dataset.containerToggle = key;
+      toggle.setAttribute('aria-controls', content.id);
+      function updateToggle() {
+        toggle.textContent = content.hidden ? 'Expand' : 'Collapse';
+        toggle.setAttribute('aria-expanded', String(!content.hidden));
+        toggle.setAttribute('aria-label', `${content.hidden ? 'Expand' : 'Collapse'} ${name}`);
+      }
+      updateToggle();
+      heading.append(title, toggle);
+      panel.append(heading);
+      if (container.error) toggle.hidden = true;
       else {
         const cpu = containerPercent(container.cpu);
         const memory = containerPercent(container.memoryPercent);
-        panel.append(metricBar('CPU · one core', cpu, container.cpu || 'Unavailable', Math.max(100, cpu || 0)));
-        panel.append(metricBar('Memory', memory, `${container.memory || 'Unavailable'}${container.memoryPercent ? ` · ${container.memoryPercent}` : ''}`));
-        panel.append(element('p', 'metric-detail-line', `Network I/O: ${container.network || 'Unavailable'} · Block I/O: ${container.block || 'Unavailable'}`));
+        content.append(metricBar('CPU · one core', cpu, container.cpu || 'Unavailable', Math.max(100, cpu || 0)));
+        content.append(metricBar('Memory', memory, `${container.memory || 'Unavailable'}${container.memoryPercent ? ` · ${container.memoryPercent}` : ''}`));
+        content.append(element('p', 'metric-detail-line', `Network I/O: ${container.network || 'Unavailable'} · Block I/O: ${container.block || 'Unavailable'}`));
         if (container.id) {
-          const key = `${container.repoId}:${container.id}`;
-          panel.append(metricGraph(`${key}:cpu`, 'Container CPU', '%'), metricGraph(`${key}:memory`, 'Container memory', '%'));
+          const graphs = [['cpu', `${key}:cpu`, 'Container CPU', '%'], ['memory', `${key}:memory`, 'Container memory', '%']];
           for (const [type, index, label] of [['network', 0, 'Network received'], ['network', 1, 'Network sent'], ['block', 0, 'Disk read'], ['block', 1, 'Disk written']]) {
-            panel.append(metricGraph(`${key}:${type}:${index}`, label, 'bytes/s'));
+            graphs.push([type, `${key}:${type}:${index}`, label, 'bytes/s']);
           }
+          content.append(graphGroup(graphs));
         }
       }
-      containerSection.append(panel);
+      panel.append(content);
+      containerGrid.append(panel);
+      if (focusedContainer === key && !toggle.hidden) toggle.dataset.restoreFocus = 'true';
     }
+    containerSection.append(containerGrid);
     detail.append(containerSection);
+    const restore = detail.querySelector('[data-restore-focus]');
+    if (restore) { delete restore.dataset.restoreFocus; restore.focus(); }
     renderRepoMetrics();
   }
 
@@ -236,6 +301,7 @@ export function createMetricsScreen({ $, element, action, api, showPage, getRepo
         metricsData = null;
         metricsError = error.message;
         previousIo.clear();
+        expandedContainers.clear();
         const time = Date.now();
         for (const points of metricHistory.values()) {
           points.push({ time, value: null });
