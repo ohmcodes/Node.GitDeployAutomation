@@ -57,7 +57,7 @@
         <section id="help-page" class="guide" hidden>
           <div class="eyebrow">DEVELOPER GUIDE</div><h1>How to deploy<span>.</span></h1>
           <h2>1. Connect a repository</h2><p>Select <strong>Add repository</strong>, enter its HTTPS or ssh:// URL and branch, and choose authentication. For generated SSH keys, add the displayed public key as a read-only deploy key and configure verified host keys in the Git Deploy runtime before cloning.</p>
-          <h2>2. Deploy and watch</h2><p>After cloning, select <strong>Deploy</strong>. Git Deploy pulls the branch and runs Docker Compose from its own clone. A successful first deployment enables polling; use Pause to stop checks. Inspect Activity after errors.</p>
+          <h2>2. Configure and deploy</h2><p>After cloning, select <strong>.env</strong> on the repository card if the project needs environment variables, then select <strong>Deploy</strong>. Git Deploy pulls the branch and runs Docker Compose from its own clone. A successful first deployment enables polling; use Pause to stop checks. Inspect Activity after errors.</p>
           <h2>3. Existing deployments</h2><p>Git Deploy does not automatically attach to existing containers. Check the Compose project name, environment files, ports, and persistent paths before deploying from the new clone; otherwise a second project or conflicting services may be created.</p>
           <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>
           <h2>Security and operations</h2><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
@@ -96,6 +96,17 @@
       <p class="hint">Commands run with Docker host access. Only use trusted scripts.</p>
       <p id="settings-error" class="error" role="alert"></p>
       <button class="primary wide" type="submit">Save settings</button>
+    </form>
+  </dialog>
+  <dialog id="env-dialog">
+    <form id="env-form">
+      <div class="dialog-head"><div><div class="eyebrow">PROJECT ENVIRONMENT</div><h2>Repository .env</h2><p id="env-title"></p></div><button type="button" class="close" data-close="env-dialog" aria-label="Close">×</button></div>
+      <label for="env-content">Environment file contents</label>
+      <textarea id="env-content" rows="12" spellcheck="false" autocomplete="off" placeholder="KEY=value&#10;OTHER_KEY=value"></textarea>
+      <p class="hint">Saved as .env in this repository's clone, unencrypted. Ensure the project ignores .env in Git. Compose reads it on deployment; deploy again after changes. Protect the data directory and backups. Scripts and container logs may expose values.</p>
+      <p id="env-status" class="hint" role="status"></p>
+      <p id="env-error" class="error" role="alert"></p>
+      <button id="env-save" class="primary wide" type="submit" disabled>Save .env</button>
     </form>
   </dialog>
   <dialog id="log-dialog">

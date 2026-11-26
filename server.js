@@ -288,13 +288,15 @@ function send(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
-async function body(req) {
-  let data = '';
+async function body(req, limit = 32768) {
+  const chunks = [];
+  let size = 0;
   for await (const chunk of req) {
-    data += chunk;
-    if (Buffer.byteLength(data) > 32768) throw new Error('Request too large');
+    size += chunk.length;
+    if (size > limit) throw new Error('Request too large');
+    chunks.push(chunk);
   }
-  const value = JSON.parse(data);
+  const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('Invalid request');
   return value;
 }
@@ -367,9 +369,55 @@ const server = http.createServer(async (req, res) => {
       if (auth.type !== 'ssh') void clone(repo);
       return send(res, 202, repo);
     }
-    const match = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})(?:\/(deploy|clone))?$/);
+    const match = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})(?:\/(deploy|clone|env))?$/);
     const repo = match && repos.find(item => item.id === match[1]);
     if (!repo) return send(res, 404, { error: 'Not found' });
+    if (match[2] === 'env' && (req.method === 'GET' || req.method === 'PUT')) {
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      let input;
+      if (req.method === 'PUT') {
+        input = await body(req, 524288);
+        if (!repos.includes(repo)) return send(res, 404, { error: 'Not found' });
+        if (typeof input.content !== 'string' || Buffer.byteLength(input.content) > 65536 || input.content.includes('\0')) {
+          return send(res, 400, { error: 'Environment file must be text no larger than 64 KiB' });
+        }
+      }
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      if (repo.cloneFailed || repo.status === 'awaiting-key' || !fs.existsSync(path.join(location(repo), '.git'))) {
+        return send(res, 409, { error: 'Clone the repository successfully before editing its environment file' });
+      }
+      active.add(repo.id);
+      let temporary;
+      try {
+        const cwd = location(repo);
+        const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+        delete env.DEPLOY_TOKEN;
+        const tracked = !!(await exec('git', ['ls-files', '--', '.env'], { cwd, env, maxBuffer: 1024 * 1024 })).stdout.trim();
+        const file = path.join(cwd, '.env');
+        let stat;
+        try {
+          stat = fs.lstatSync(file);
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+        if (stat && (!stat.isFile() || stat.isSymbolicLink())) {
+          return send(res, 409, { error: 'The repository .env must be a regular file, not a symlink or directory' });
+        }
+        if (req.method === 'GET') {
+          if (stat && stat.size > 65536) return send(res, 409, { error: 'Existing environment file exceeds 64 KiB' });
+          return send(res, 200, { exists: !!stat, tracked, content: stat ? fs.readFileSync(file, 'utf8') : '' });
+        }
+        if (tracked) return send(res, 409, { error: 'The repository tracks .env in Git. Remove it from version control before editing it here to avoid conflicts and exposing secrets.' });
+        temporary = path.join(cwd, `.git-deploy-env-${crypto.randomUUID()}.tmp`);
+        fs.writeFileSync(temporary, input.content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        fs.renameSync(temporary, file);
+        temporary = undefined;
+        return send(res, 200, { ok: true });
+      } finally {
+        if (temporary) fs.rmSync(temporary, { force: true });
+        active.delete(repo.id);
+      }
+    }
     if (match[2] === 'clone' && req.method === 'POST') {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
       if (repo.status !== 'awaiting-key' && !repo.cloneFailed) return send(res, 409, { error: 'Repository is not awaiting a clone' });

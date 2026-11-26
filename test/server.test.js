@@ -36,10 +36,13 @@ class Stub {
       else if (a[0] == "fetch") File.Copy(Path.Combine(dir, "remote"), ".fetch", true);
       else if (a[0] == "merge-base") { if (File.ReadAllText(".fetch") == "rewound-commit") return 1; }
       else if (a[0] == "rev-parse") Console.Write(File.ReadAllText(a[1] == "HEAD" ? ".head" : ".fetch"));
+      else if (a[0] == "ls-files") { if (File.Exists(Path.Combine(dir, "tracked-env"))) Console.WriteLine(".env"); }
       else return 1;
     } else if (name == "docker") {
       if (a.Length > 1 && a[1] == "down" && File.Exists(Path.Combine(dir, "fail-down"))) return 1;
       if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "fail-up"))) return 1;
+      if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "expected-env")) &&
+          (!File.Exists(".env") || File.ReadAllText(".env") != File.ReadAllText(Path.Combine(dir, "expected-env")))) return 1;
       if (a.Length > 2 && a[1] == "ps" && a[2] == "-q") Console.WriteLine("container1");
       else if (a[0] == "stats") Console.WriteLine("{\\"Name\\":\\"app\\",\\"CPUPerc\\":\\"3%\\",\\"MemUsage\\":\\"1MiB / 2MiB\\",\\"MemPerc\\":\\"50%\\",\\"NetIO\\":\\"1B / 2B\\",\\"BlockIO\\":\\"3B / 4B\\"}");
       else Console.WriteLine("docker " + String.Join(" ", a));
@@ -63,12 +66,14 @@ case "$1" in
   fetch) cp "$FAKE_DIR/remote" .fetch;;
   merge-base) [ "$(cat .fetch)" != "rewound-commit" ];;
   rev-parse) if [ "$2" = HEAD ]; then cat .head; else cat .fetch; fi;;
+  ls-files) if [ -f "$FAKE_DIR/tracked-env" ]; then echo .env; fi;;
   *) exit 1;;
 esac
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
 if [ "$2" = down ] && [ -f "$FAKE_DIR/fail-down" ]; then exit 1; fi
 if [ "$2" = up ] && [ -f "$FAKE_DIR/fail-up" ]; then exit 1; fi
+if [ "$2" = up ] && [ -f "$FAKE_DIR/expected-env" ]; then cmp -s .env "$FAKE_DIR/expected-env" || exit 1; fi
 if [ "$2" = ps ] && [ "$3" = -q ]; then echo container1
 elif [ "$1" = stats ]; then echo '{"Name":"app","CPUPerc":"3%","MemUsage":"1MiB / 2MiB","MemPerc":"50%","NetIO":"1B / 2B","BlockIO":"3B / 4B"}'
 else echo "docker $*"; fi
@@ -151,6 +156,35 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.equal(added.status, 202);
   const { id } = await added.json();
   await waitFor(async () => (await current(id)).status === 'ready');
+  const envUrl = `/api/repos/${id}/env`;
+  assert.equal((await request(envUrl, 'GET', undefined, false)).status, 401);
+  assert.deepEqual(await (await request(envUrl)).json(), { exists: false, tracked: false, content: '' });
+  assert.equal((await request(envUrl, 'PUT', { content: 'a'.repeat(65537) })).status, 400);
+  assert.equal((await request(envUrl, 'PUT', { content: 'BAD=\0' })).status, 400);
+  const envContent = 'DATABASE_PASSWORD=test-secret-123\nLABEL=héllo\n';
+  fs.writeFileSync(path.join(dir, 'expected-env'), envContent);
+  assert.equal((await request(envUrl, 'PUT', { content: envContent })).status, 200);
+  const envPath = path.join(dir, 'data', 'repos', id, '.env');
+  assert.equal(fs.readFileSync(envPath, 'utf8'), envContent);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+  assert.deepEqual(await (await request(envUrl)).json(), { exists: true, tracked: false, content: envContent });
+  fs.writeFileSync(path.join(dir, 'tracked-env'), '');
+  assert.equal((await (await request(envUrl)).json()).tracked, true);
+  assert.equal((await request(envUrl, 'PUT', { content: 'replacement' })).status, 409);
+  assert.equal(fs.readFileSync(envPath, 'utf8'), envContent);
+  fs.rmSync(path.join(dir, 'tracked-env'));
+  fs.renameSync(envPath, `${envPath}.backup`);
+  fs.mkdirSync(envPath);
+  assert.equal((await request(envUrl)).status, 409);
+  assert.equal((await request(envUrl, 'PUT', { content: 'replacement' })).status, 409);
+  fs.rmdirSync(envPath);
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(`${envPath}.backup`, envPath);
+    assert.equal((await request(envUrl)).status, 409);
+    assert.equal((await request(envUrl, 'PUT', { content: 'replacement' })).status, 409);
+    fs.unlinkSync(envPath);
+  }
+  fs.renameSync(`${envPath}.backup`, envPath);
   assert.equal((await request(`/api/repos/${id}/deploy`, 'POST')).status, 202);
   let repo = await waitFor(async () => { const item = await current(id); return item.status === 'deployed' && item; });
   assert.equal(repo.commit, 'first-commit');
@@ -158,6 +192,8 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.match(repo.log, /docker compose ps/);
   assert.match(repo.log, /docker compose logs --tail=100/);
   assert.match(repo.log, /custom-step/);
+  assert.doesNotMatch(JSON.stringify(repo), /test-secret-123/);
+  assert.doesNotMatch(JSON.stringify(await (await request('/api/activity')).json()), /test-secret-123/);
   assert.ok(repo.lastPulled);
   const metric = await (await request('/api/metrics')).json();
   assert.equal(metric.containers[0].name, 'app');
@@ -172,6 +208,10 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   start();
   repo = await waitFor(async () => { const item = await current(id); return item && item.status === 'deployed' && item; });
   assert.equal(repo.commit, 'first-commit');
+  assert.equal((await (await request(envUrl)).json()).content, envContent);
+  const updatedEnv = 'DATABASE_PASSWORD=updated-secret\n';
+  assert.equal((await request(envUrl, 'PUT', { content: updatedEnv })).status, 200);
+  fs.writeFileSync(path.join(dir, 'expected-env'), updatedEnv);
   fs.writeFileSync(path.join(dir, 'remote'), 'second-commit');
   repo = await waitFor(async () => { const item = await current(id); return item.commit === 'second-commit' && item.status === 'deployed' && item; }, 14000);
   assert.ok(repo.lastChecked);
@@ -190,6 +230,8 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.match((await current(id)).message, /Removal failed/);
   fs.rmSync(path.join(dir, 'fail-down'));
   assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true })).status, 200);
+  assert.equal(fs.existsSync(envPath), false);
+  fs.rmSync(path.join(dir, 'expected-env'));
   assert.ok((await (await request('/api/activity')).json()).some(entry => /docker compose down --rmi local/.test(entry.text)));
 
   fs.writeFileSync(path.join(dir, 'fail-clone'), '');

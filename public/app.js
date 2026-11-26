@@ -7,6 +7,8 @@ let filter = 'all';
 let selected = null;
 let logRepoId = null;
 let keyRepoId = null;
+let envRepoId = null;
+let envRequest = 0;
 let page = 'dashboard';
 let refreshing = false;
 let metricsRefreshing = false;
@@ -60,6 +62,34 @@ function showKey(repo) {
   $('#key-dialog').showModal();
 }
 
+async function showEnv(repo, name) {
+  const requestId = ++envRequest;
+  const currentSession = session;
+  envRepoId = repo.id;
+  $('#env-title').textContent = name;
+  $('#env-content').value = '';
+  $('#env-content').disabled = true;
+  $('#env-save').disabled = true;
+  $('#env-error').textContent = '';
+  $('#env-status').textContent = 'Loading environment file…';
+  $('#env-dialog').showModal();
+  try {
+    const result = await api(`/api/repos/${repo.id}/env`);
+    if (session !== currentSession || requestId !== envRequest || !$('#env-dialog').open) return;
+    $('#env-content').value = result.content;
+    $('#env-content').disabled = result.tracked;
+    $('#env-save').disabled = result.tracked;
+    $('#env-status').textContent = result.tracked
+      ? 'This .env is tracked by Git and cannot be changed here. Remove it from version control before storing secrets.'
+      : result.exists ? 'Existing .env loaded. Saving replaces its contents.' : 'No .env exists yet. Saving creates one.';
+  } catch (error) {
+    if (session === currentSession && requestId === envRequest && $('#env-dialog').open) {
+      $('#env-status').textContent = '';
+      $('#env-error').textContent = error.message;
+    }
+  }
+}
+
 async function change(repo, method, body, suffix = '') {
   try {
     await api(`/api/repos/${repo.id}${suffix}`, { method, body });
@@ -108,6 +138,7 @@ function render() {
     buttons.append(
       action('Activity', 'secondary', () => { logRepoId = repo.id; $('#log-title').textContent = name; updateLog($('#log-content'), repo.log || 'No activity yet.', true); $('#log-dialog').showModal(); $('#log-content').scrollTop = $('#log-content').scrollHeight; }),
       action('Settings', 'secondary', () => { selected = repo; $('#settings-error').textContent = ''; $('#edit-script').value = repo.script; $('#edit-username').value = ''; $('#edit-token').value = ''; $('#edit-token-fields').hidden = repo.authType !== 'token'; $('#settings-dialog').showModal(); }, busy),
+      action('.env', 'secondary', () => showEnv(repo, name), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
       action(repo.watching ? 'Pause' : 'Watch', 'secondary', () => change(repo, 'PATCH', { watching: !repo.watching }), busy),
       ...(repo.authType === 'ssh' ? [action('SSH key', 'secondary', () => showKey(repo), busy)] : []),
       ...(repo.cloneFailed ? [action('Retry clone', 'secondary', () => change(repo, 'POST', undefined, '/clone'), busy)] : []),
@@ -317,12 +348,37 @@ $('#logout').addEventListener('click', () => {
   renderMetrics();
   $('#feed-content').textContent = 'No activity yet.';
   $('#log-content').textContent = '';
+  if ($('#env-dialog').open) $('#env-dialog').close();
   render();
   $('#login-dialog').showModal();
 });
 $('#login-dialog').addEventListener('cancel', event => event.preventDefault());
 $('#add-open').addEventListener('click', () => { $('#add-error').textContent = ''; $('#add-dialog').showModal(); });
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
+$('#env-dialog').addEventListener('close', () => {
+  envRequest++;
+  envRepoId = null;
+  $('#env-content').value = '';
+});
+$('#env-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const repoId = envRepoId;
+  const requestId = envRequest;
+  const currentSession = session;
+  $('#env-save').disabled = true;
+  $('#env-error').textContent = '';
+  try {
+    await api(`/api/repos/${repoId}/env`, { method: 'PUT', body: { content: $('#env-content').value } });
+    if (session !== currentSession || requestId !== envRequest || !$('#env-dialog').open) return;
+    $('#env-dialog').close();
+    notice('Environment file saved. Deploy the repository to apply changes.');
+  } catch (error) {
+    if (session === currentSession && requestId === envRequest && $('#env-dialog').open) {
+      $('#env-error').textContent = error.message;
+      $('#env-save').disabled = false;
+    }
+  }
+});
 function showPage(nextPage) {
   page = nextPage;
   $('#current-page').textContent = { dashboard: 'REPOSITORIES', metrics: 'SYSTEM METRICS', activity: 'ACTIVITY FEED', help: 'DEVELOPER GUIDE' }[page];

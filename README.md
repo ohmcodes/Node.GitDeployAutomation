@@ -12,6 +12,7 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 - Poll deployed repositories for changes, deploy fast-forward updates, and pause or resume watching. A repository is not automatically deployed until its first manual deployment succeeds.
 - Show Git Deploy process and configured Docker host summaries on the dashboard, per-container summaries on repository cards, and detailed bars for all three on the metrics page; persist deployment state and recent activity across restarts.
 - Use a managed HTTPS token or generate an SSH deploy key for a private repository.
+- Edit a repository's root `.env` after cloning, before or between deployments.
 - Remove a repository and its clone, with optional Compose service and locally built image cleanup.
 
 ## Quick start
@@ -22,7 +23,7 @@ Requirements: Node.js 20.6+, Git, Docker with the Compose plugin, and permission
 npm start
 ```
 
-Open <http://127.0.0.1:3000>, enter the token, and select **Add repository**. Supply the clone URL and branch, optionally add a shell script, and wait for cloning to finish. Select **Deploy** to perform the first deployment; use **Activity** to inspect output. Thereafter the watcher checks for changes every 60 seconds by default.
+Open <http://127.0.0.1:3000>, enter the token, and select **Add repository**. Supply the clone URL and branch, optionally add a shell script, and wait for cloning to finish. If needed, select **.env** on the repository card and save the project's environment file. Select **Deploy** to perform the first deployment; use **Activity** to inspect output. Thereafter the watcher checks for changes every 60 seconds by default.
 
 For running the application itself in Docker, private repositories, configuration, troubleshooting, and security details, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -48,6 +49,7 @@ Run the focused tests with `npm test`. They use temporary Git and Docker stand-i
 - Cards highlight rebuilding, paused, and recently pulled (60 seconds) states. The latest 200 activity chunks and the most recent 40,000 characters per repository are persisted; this feed is not a tamper-proof audit log.
 - Removal only runs Compose cleanup when explicitly selected; `docker compose down --rmi local` can affect other deployments sharing a project name or built image. Volumes are not deleted.
 - Managed tokens and unencrypted SSH private keys are stored in the protected data directory, not in a dedicated secret manager. Logs and scripts may contain sensitive information; do not print secrets. There is no multi-user access control, audit log, deployment queue, rollback, webhook, or container health monitoring yet.
+- Repository `.env` files are stored unencrypted in the managed clone. The editor will not overwrite a Git-tracked `.env`; keep it ignored by Git. Changes take effect on the next deployment. See [deployment and security](DEPLOYMENT.md#repository-environment-files).
 
 ## Suggested next steps
 
