@@ -165,14 +165,14 @@ async function clone(repo) {
   save();
 }
 
-async function deployWork(repo) {
+async function deployWork(repo, forceRecreate = false) {
   const cwd = location(repo);
   await run(repo, 'git', ['pull', '--ff-only', 'origin', repo.branch], cwd);
   repo.lastPulled = new Date().toISOString();
   repo.status = 'rebuilding';
   repo.composeAttempted = true;
   save();
-  await run(repo, 'docker', ['compose', 'up', '-d', '--build'], cwd);
+  await run(repo, 'docker', ['compose', 'up', '-d', '--build', ...(forceRecreate ? ['--force-recreate'] : [])], cwd);
   repo.status = 'deploying';
   save();
   if (repo.script) await run(repo, 'sh', ['-c', repo.script], cwd);
@@ -183,7 +183,7 @@ async function deployWork(repo) {
 }
 
 function deploy(repo) {
-  return exclusive(repo, 'deploying', () => deployWork(repo));
+  return exclusive(repo, 'deploying', () => deployWork(repo, !!repo.lastDeployed));
 }
 
 function check(repo) {
@@ -229,6 +229,75 @@ function validTokenAuth(auth, url) {
   return auth && auth.type === 'token' && new URL(url).protocol === 'https:' &&
     typeof auth.username === 'string' && !!auth.username && auth.username.length <= 200 && !/[:\r\n]/.test(auth.username) &&
     typeof auth.token === 'string' && !!auth.token && auth.token.length <= 4096 && !/[\r\n]/.test(auth.token);
+}
+
+function pageDomain(repo) {
+  const file = path.join(location(repo), '.env');
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) {
+    throw new Error('The repository .env must be a regular file no larger than 64 KiB');
+  }
+  let value;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?DOMAIN\s*=\s*(.*)$/);
+    if (!match) continue;
+    const raw = match[1].trim();
+    if (raw.startsWith('"') || raw.startsWith("'")) {
+      const quoted = raw.match(/^(["'])(.*?)\1(?:\s+#.*)?\s*$/);
+      if (!quoted) throw new Error('DOMAIN in .env has invalid quoting');
+      value = quoted[2];
+    } else {
+      value = raw.replace(/\s+#.*$/, '').trim();
+    }
+  }
+  if (!value) return null;
+  if (value.includes('$') || value.includes('\\') || /[\s\x00-\x1f]/.test(value)) {
+    throw new Error('DOMAIN must be a literal hostname or HTTP(S) URL without variables');
+  }
+  let url;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`);
+  } catch {
+    throw new Error('DOMAIN must be a valid hostname or HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
+    throw new Error('DOMAIN must be an HTTP(S) URL without credentials, query, or fragment');
+  }
+  return url.href;
+}
+
+async function publishedPorts(repo) {
+  const env = { ...process.env };
+  delete env.DEPLOY_TOKEN;
+  const output = (await exec('docker', ['compose', 'ps', '--format', 'json'], {
+    cwd: location(repo), env, maxBuffer: 2 * 1024 * 1024
+  })).stdout.trim();
+  if (!output) return [];
+  let services;
+  try {
+    services = output.startsWith('[') ? JSON.parse(output) : output.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    if (!Array.isArray(services)) throw new Error('Unexpected Compose output');
+  } catch {
+    throw new Error('Could not read published ports from Docker Compose');
+  }
+  const ports = [];
+  for (const service of services) {
+    if (service.State !== 'running' || !Array.isArray(service.Publishers)) continue;
+    for (const publisher of service.Publishers) {
+      const port = publisher.PublishedPort;
+      if (publisher.Protocol !== 'tcp' || !Number.isInteger(port) || port < 1 || port > 65535) continue;
+      const hostIp = typeof publisher.URL === 'string' ? publisher.URL : '';
+      const name = typeof service.Service === 'string' ? service.Service : '';
+      if (!ports.some(item => item.port === port && item.hostIp === hostIp && item.service === name)) ports.push({ port, hostIp, service: name });
+    }
+  }
+  return ports;
 }
 
 let previousHostCpu;
@@ -369,9 +438,24 @@ const server = http.createServer(async (req, res) => {
       if (auth.type !== 'ssh') void clone(repo);
       return send(res, 202, repo);
     }
-    const match = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})(?:\/(deploy|clone|env))?$/);
+    const match = pathname.match(/^\/api\/repos\/([0-9a-f-]{36})(?:\/(deploy|clone|env|page))?$/);
     const repo = match && repos.find(item => item.id === match[1]);
     if (!repo) return send(res, 404, { error: 'Not found' });
+    if (match[2] === 'page' && req.method === 'GET') {
+      if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
+      if (!repo.lastDeployed) return send(res, 409, { error: 'Deploy the repository before opening its page' });
+      active.add(repo.id);
+      try {
+        const domain = pageDomain(repo);
+        if (domain) return send(res, 200, { url: domain, ports: [] });
+        return send(res, 200, { url: null, ports: await publishedPorts(repo) });
+      } catch (error) {
+        console.error('Unable to determine project page:', error.message);
+        return send(res, 500, { error: `Unable to determine project page: ${error.message}` });
+      } finally {
+        active.delete(repo.id);
+      }
+    }
     if (match[2] === 'env' && (req.method === 'GET' || req.method === 'PUT')) {
       if (active.has(repo.id)) return send(res, 409, { error: 'Repository is busy' });
       let input;

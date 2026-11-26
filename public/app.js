@@ -9,6 +9,7 @@ let logRepoId = null;
 let keyRepoId = null;
 let envRepoId = null;
 let envRequest = 0;
+let pageRequest = 0;
 let page = 'dashboard';
 let refreshing = false;
 let metricsRefreshing = false;
@@ -90,6 +91,47 @@ async function showEnv(repo, name) {
   }
 }
 
+async function showProjectPage(repo, name) {
+  const requestId = ++pageRequest;
+  const currentSession = session;
+  const links = $('#page-links');
+  $('#page-title').textContent = name;
+  links.textContent = 'Finding project page…';
+  $('#page-dialog').showModal();
+  try {
+    const result = await api(`/api/repos/${repo.id}/page`);
+    if (session !== currentSession || requestId !== pageRequest || !$('#page-dialog').open) return;
+    links.replaceChildren();
+    if (result.url) {
+      const link = element('a', 'page-link', result.url);
+      link.href = result.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      links.append(element('p', '', 'From the repository DOMAIN:'), link);
+    } else if (result.ports.length) {
+      links.append(element('p', '', 'Choose a published TCP port:'));
+      for (const published of result.ports) {
+        const url = new URL(window.location.origin);
+        url.protocol = 'http:';
+        url.port = String(published.port);
+        url.pathname = '/';
+        url.search = '';
+        url.hash = '';
+        const label = `${published.service || 'Service'} · ${url.href} · bound to ${published.hostIp || 'unspecified address'}`;
+        const link = element('a', 'page-link', label);
+        link.href = url.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        links.append(link);
+      }
+    } else {
+      links.textContent = 'No DOMAIN or published TCP ports found. Add DOMAIN to the repository .env or publish a web port in Compose.';
+    }
+  } catch (error) {
+    if (session === currentSession && requestId === pageRequest && $('#page-dialog').open) links.textContent = error.message;
+  }
+}
+
 async function change(repo, method, body, suffix = '') {
   try {
     await api(`/api/repos/${repo.id}${suffix}`, { method, body });
@@ -142,7 +184,8 @@ function render() {
       action(repo.watching ? 'Pause' : 'Watch', 'secondary', () => change(repo, 'PATCH', { watching: !repo.watching }), busy),
       ...(repo.authType === 'ssh' ? [action('SSH key', 'secondary', () => showKey(repo), busy)] : []),
       ...(repo.cloneFailed ? [action('Retry clone', 'secondary', () => change(repo, 'POST', undefined, '/clone'), busy)] : []),
-      action('Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
+      ...(repo.lastDeployed ? [action('View page ↗', 'secondary', () => showProjectPage(repo, name), busy)] : []),
+      action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
       action('×', 'remove', () => { selected = repo; $('#delete-title').textContent = `Remove ${name}?`; $('#delete-form').reset(); $('#delete-images').disabled = true; $('#delete-dialog').showModal(); }, busy)
     );
     buttons.lastChild.setAttribute('aria-label', `Remove ${name}`);
@@ -349,6 +392,7 @@ $('#logout').addEventListener('click', () => {
   $('#feed-content').textContent = 'No activity yet.';
   $('#log-content').textContent = '';
   if ($('#env-dialog').open) $('#env-dialog').close();
+  if ($('#page-dialog').open) $('#page-dialog').close();
   render();
   $('#login-dialog').showModal();
 });
@@ -359,6 +403,10 @@ $('#env-dialog').addEventListener('close', () => {
   envRequest++;
   envRepoId = null;
   $('#env-content').value = '';
+});
+$('#page-dialog').addEventListener('close', () => {
+  pageRequest++;
+  $('#page-links').replaceChildren();
 });
 $('#env-form').addEventListener('submit', async event => {
   event.preventDefault();

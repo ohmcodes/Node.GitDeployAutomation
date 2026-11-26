@@ -43,7 +43,10 @@ class Stub {
       if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "fail-up"))) return 1;
       if (a.Length > 1 && a[1] == "up" && File.Exists(Path.Combine(dir, "expected-env")) &&
           (!File.Exists(".env") || File.ReadAllText(".env") != File.ReadAllText(Path.Combine(dir, "expected-env")))) return 1;
-      if (a.Length > 2 && a[1] == "ps" && a[2] == "-q") Console.WriteLine("container1");
+      if (a.Length > 3 && a[1] == "ps" && a[2] == "--format" && a[3] == "json") {
+        string file = Path.Combine(dir, "ports.json"); if (File.Exists(file)) Console.Write(File.ReadAllText(file));
+      }
+      else if (a.Length > 2 && a[1] == "ps" && a[2] == "-q") Console.WriteLine("container1");
       else if (a[0] == "stats") Console.WriteLine("{\\"Name\\":\\"app\\",\\"CPUPerc\\":\\"3%\\",\\"MemUsage\\":\\"1MiB / 2MiB\\",\\"MemPerc\\":\\"50%\\",\\"NetIO\\":\\"1B / 2B\\",\\"BlockIO\\":\\"3B / 4B\\"}");
       else Console.WriteLine("docker " + String.Join(" ", a));
     } else if (name == "sh") Console.WriteLine(a[a.Length - 1]);
@@ -74,7 +77,8 @@ esac
 if [ "$2" = down ] && [ -f "$FAKE_DIR/fail-down" ]; then exit 1; fi
 if [ "$2" = up ] && [ -f "$FAKE_DIR/fail-up" ]; then exit 1; fi
 if [ "$2" = up ] && [ -f "$FAKE_DIR/expected-env" ]; then cmp -s .env "$FAKE_DIR/expected-env" || exit 1; fi
-if [ "$2" = ps ] && [ "$3" = -q ]; then echo container1
+if [ "$2" = ps ] && [ "$3" = --format ] && [ "$4" = json ]; then [ ! -f "$FAKE_DIR/ports.json" ] || cat "$FAKE_DIR/ports.json"
+elif [ "$2" = ps ] && [ "$3" = -q ]; then echo container1
 elif [ "$1" = stats ]; then echo '{"Name":"app","CPUPerc":"3%","MemUsage":"1MiB / 2MiB","MemPerc":"50%","NetIO":"1B / 2B","BlockIO":"3B / 4B"}'
 else echo "docker $*"; fi
 `, { mode: 0o755 });
@@ -156,6 +160,9 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.equal(added.status, 202);
   const { id } = await added.json();
   await waitFor(async () => (await current(id)).status === 'ready');
+  const pageUrl = `/api/repos/${id}/page`;
+  assert.equal((await request(pageUrl, 'GET', undefined, false)).status, 401);
+  assert.equal((await request(pageUrl)).status, 409);
   const envUrl = `/api/repos/${id}/env`;
   assert.equal((await request(envUrl, 'GET', undefined, false)).status, 401);
   assert.deepEqual(await (await request(envUrl)).json(), { exists: false, tracked: false, content: '' });
@@ -189,12 +196,36 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   let repo = await waitFor(async () => { const item = await current(id); return item.status === 'deployed' && item; });
   assert.equal(repo.commit, 'first-commit');
   assert.match(repo.log, /docker compose up -d --build/);
+  assert.doesNotMatch(repo.log, /--force-recreate/);
   assert.match(repo.log, /docker compose ps/);
   assert.match(repo.log, /docker compose logs --tail=100/);
   assert.match(repo.log, /custom-step/);
   assert.doesNotMatch(JSON.stringify(repo), /test-secret-123/);
   assert.doesNotMatch(JSON.stringify(await (await request('/api/activity')).json()), /test-secret-123/);
   assert.ok(repo.lastPulled);
+  fs.writeFileSync(path.join(dir, 'ports.json'), JSON.stringify([
+    { Service: 'web', State: 'running', Publishers: [{ URL: '0.0.0.0', PublishedPort: 8080, Protocol: 'tcp' }, { URL: '::', PublishedPort: 8443, Protocol: 'tcp' }, { URL: '0.0.0.0', PublishedPort: 9000, Protocol: 'udp' }] },
+    { Service: 'db', State: 'exited', Publishers: [{ URL: '0.0.0.0', PublishedPort: 5432, Protocol: 'tcp' }] }
+  ]));
+  assert.deepEqual(await (await request(pageUrl)).json(), { url: null, ports: [{ port: 8080, hostIp: '0.0.0.0', service: 'web' }, { port: 8443, hostIp: '::', service: 'web' }] });
+  fs.writeFileSync(path.join(dir, 'ports.json'), '{"Service":"web","State":"running","Publishers":[{"URL":"0.0.0.0","PublishedPort":8081,"Protocol":"tcp"}]}\n{"Service":"job","State":"exited","Publishers":null}\n');
+  assert.deepEqual(await (await request(pageUrl)).json(), { url: null, ports: [{ port: 8081, hostIp: '0.0.0.0', service: 'web' }] });
+  fs.writeFileSync(path.join(dir, 'ports.json'), '');
+  assert.deepEqual(await (await request(pageUrl)).json(), { url: null, ports: [] });
+  fs.writeFileSync(path.join(dir, 'ports.json'), 'invalid json');
+  assert.equal((await request(pageUrl)).status, 500);
+  assert.equal((await request(envUrl, 'PUT', { content: 'DOMAIN="example.test"\nSECRET=do-not-return\n' })).status, 200);
+  assert.deepEqual(await (await request(pageUrl)).json(), { url: 'https://example.test/', ports: [] });
+  assert.equal((await request(envUrl, 'PUT', { content: 'DOMAIN=http://example.test:8080/path\n' })).status, 200);
+  assert.equal((await (await request(pageUrl)).json()).url, 'http://example.test:8080/path');
+  assert.equal((await request(envUrl, 'PUT', { content: 'DOMAIN=https://user:password@example.test\n' })).status, 200);
+  assert.equal((await request(pageUrl)).status, 500);
+  assert.equal((await request(envUrl, 'PUT', { content: 'DOMAIN=${HOST}\n' })).status, 200);
+  assert.equal((await request(pageUrl)).status, 500);
+  assert.equal((await request(envUrl, 'PUT', { content: envContent })).status, 200);
+  assert.equal((await request(`/api/repos/${id}/deploy`, 'POST')).status, 202);
+  repo = await waitFor(async () => { const item = await current(id); return item.status === 'deployed' && item.log.includes('--force-recreate') && item; });
+  assert.match(repo.log, /docker compose up -d --build --force-recreate/);
   const metric = await (await request('/api/metrics')).json();
   assert.equal(metric.containers[0].name, 'app');
   assert.equal(metric.containers[0].cpu, '3%');
@@ -215,6 +246,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   fs.writeFileSync(path.join(dir, 'remote'), 'second-commit');
   repo = await waitFor(async () => { const item = await current(id); return item.commit === 'second-commit' && item.status === 'deployed' && item; }, 14000);
   assert.ok(repo.lastChecked);
+  assert.equal((repo.log.match(/^\$ docker compose up -d --build --force-recreate$/gm) || []).length, 1);
   assert.equal((await request(`/api/repos/${id}`, 'PATCH', { watching: false, script: 'echo updated' })).status, 200);
   repo = await current(id);
   assert.equal(repo.watching, false);

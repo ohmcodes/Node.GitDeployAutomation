@@ -9,6 +9,8 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 - Light and dark themes, repository filters and status colors, a developer guide, and a centralized activity feed.
 - Clone HTTPS or `ssh://` repositories, select a branch (default `main`), and manually deploy.
 - For a deployment, run `git pull --ff-only origin <branch>`, `docker compose up -d --build`, an optional custom shell script, `docker compose ps`, and `docker compose logs --tail=100` (all services).
+- After the first successful deployment, **Redeploy** additionally passes `--force-recreate`; automatic updates retain the normal Compose behavior.
+- **View page** opens a chooser using the repository `.env` `DOMAIN`, or its published TCP ports if no domain is set.
 - Poll deployed repositories for changes, deploy fast-forward updates, and pause or resume watching. A repository is not automatically deployed until its first manual deployment succeeds.
 - Show Git Deploy process and configured Docker host summaries on the dashboard, per-container summaries on repository cards, and detailed bars for all three on the metrics page; persist deployment state and recent activity across restarts.
 - Use a managed HTTPS token or generate an SSH deploy key for a private repository.
