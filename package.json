@@ -4,9 +4,9 @@
   "description": "A lightweight Git and Docker Compose deployment watcher",
   "private": true,
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=20.6" },
   "scripts": {
-    "start": "node server.js",
+    "start": "node --env-file=.env server.js",
     "test": "node --test"
   }
 }

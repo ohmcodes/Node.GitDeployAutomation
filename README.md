@@ -15,11 +15,9 @@ A lightweight, self-hosted Git watcher and Docker Compose deployment dashboard. 
 
 ## Quick start
 
-Requirements: Node.js 20+, Git, Docker with the Compose plugin, and permissions to use the Docker daemon. On the machine where the containers should run:
+Requirements: Node.js 20.6+, Git, Docker with the Compose plugin, and permissions to use the Docker daemon. Set `DEPLOY_TOKEN` in `.env` (or in the shell environment) on the machine where the containers should run, then start the app:
 
 ```sh
-export DEPLOY_TOKEN="$(openssl rand -hex 32)"
-echo "$DEPLOY_TOKEN"  # Enter this in the dashboard; keep it private.
 npm start
 ```
 

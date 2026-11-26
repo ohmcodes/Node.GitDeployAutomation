@@ -4,5 +4,6 @@ WORKDIR /app
 COPY package.json server.js ./
 COPY public ./public
 ENV NODE_ENV=production HOST=0.0.0.0 DATA_DIR=/srv/git-deploy
-EXPOSE 3000
+EXPOSE 3014
 CMD ["node", "server.js"]
+    
