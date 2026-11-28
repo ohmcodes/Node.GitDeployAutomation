@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- **Automatic permissions did nothing for hardened services** (`cap_drop: ALL`, as in CronDNS): the one-off `chown` container inherited the dropped capabilities, so even root could not change owners, and the app still failed with `EACCES` (for example on `/data/secrets.json`). The `chown` container now adds back only `CHOWN`, `FOWNER`, `DAC_OVERRIDE` and `DAC_READ_SEARCH` for that single command; the service itself is unchanged.
+- Writable bind mounts from host paths outside the repository are now named in the Activity log instead of being skipped silently.
+
 ### Added
 - **Automatic permissions** (default on): before each deploy, writable mounts (named volumes, bind mounts inside the clone) of every non-root service are given to the user that service runs as, using one-off containers of that service. Manual File owner moved to Settings → Advanced.
 - **.env field** when adding a repository, saved as soon as the clone exists.

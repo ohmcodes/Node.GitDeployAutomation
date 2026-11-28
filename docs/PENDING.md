@@ -20,6 +20,7 @@ Notes from the session that added container consoles, the Pull button, file owne
    - `no writable mounts to prepare`: `/data` is not a volume or bind mount. Either add one in the app's compose file (`volumes: [app-data:/data]`) or prepare it in the Dockerfile (`RUN mkdir -p /data && chown node:node /data` before `USER node`).
    - `could not detect the user`: the image has no `id` command. Use **Settings → Advanced** (File owner + Writable folders).
    - `… left unchanged`: the log says why (whole-repo mount, or a folder with Compose files or Dockerfiles).
+   - `could not change ownership in …`: before the cap_drop fix this was the CronDNS case (`cap_drop: ALL`). **Update Git Deploy itself first** (rebuild its container), then Redeploy CronDNS. If it still appears, use **Settings → Advanced** with the owner the message names.
 4. **Reverse proxy** (if used). Consoles need WebSockets and the original Host:
    ```nginx
    proxy_set_header Host $host;

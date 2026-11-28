@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { writableMounts, parseNumber, plainPath } = require('../lib/auto-permissions');
+const { writableMounts, parseNumber, plainPath, chownArgs } = require('../lib/auto-permissions');
 
 const cwd = path.resolve('/srv/git-deploy/repos/abc');
 const at = rel => path.join(cwd, rel);
@@ -39,6 +39,7 @@ test('writableMounts picks safe named volumes and bind mounts inside the clone o
   ]);
   assert.deepEqual(skipped, [
     '/ext (external volume shared-ext)',
+    `/var/run/docker.sock (host path ${path.resolve('/var/run/docker.sock')} is outside the repository; prepare its owner on the host)`,
     '/app (mounts the whole repository)',
     '/deploy (contains Compose files or Dockerfiles)',
     '/repo (is Git metadata)',
@@ -71,4 +72,16 @@ test('parseNumber reads id -u / id -g output', () => {
   assert.equal(parseNumber('1000\n'), 1000);
   assert.equal(parseNumber('0'), 0);
   assert.equal(parseNumber('exec: "id": executable file not found'), null);
+});
+
+test('chown one-off container adds back the capabilities a cap_drop: ALL service removes', () => {
+  const args = chownArgs('crondns', '1000:1000', ['/data']);
+  assert.deepEqual(args.slice(0, 7), ['compose', 'run', '--rm', '--no-deps', '-T', '--user', '0']);
+  for (const cap of ['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'DAC_READ_SEARCH']) {
+    const index = args.indexOf(cap);
+    assert.ok(index > 0 && args[index - 1] === '--cap-add', `missing --cap-add ${cap}`);
+  }
+  // Options must come before the service name, chown arguments after it.
+  assert.deepEqual(args.slice(args.indexOf('--entrypoint')), ['--entrypoint', 'chown', 'crondns', '-R', '-h', '1000:1000', '/data']);
+  assert.ok(!args.includes('--privileged'));
 });
