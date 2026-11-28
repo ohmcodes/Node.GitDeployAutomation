@@ -15,6 +15,6 @@
 
 ## Project rules
 
-- Security-sensitive actions (deploy, delete, container stop/kill/restart/pause, console) require a fresh authenticator code via `auth.authorizeAction`.
+- Security-sensitive actions (deploy, delete, container stop/kill/restart/pause, console, script and permission changes) must go through `auth.authorizeAction`. An active authenticator session only needs the browser confirmation; idle sessions are signed out (`IDLE_TIMEOUT_MINUTES`).
 - Never pass `DEPLOY_TOKEN` to child processes; strip it from the environment.
 - Run `npm test` before calling work done. Tests use Git/Docker stand-ins and never deploy real containers.

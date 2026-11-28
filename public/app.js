@@ -70,6 +70,8 @@ function showRepoIcon(icon, repo) {
   });
 }
 
+// Sensitive actions only need an "Are you sure?" while signed in with the authenticator.
+// Resolves to true (send as authCode) when confirmed, null when cancelled.
 function confirmWithAuthenticator(description) {
   if (loginMethod === 'token') {
     notice('Set up an authenticator on the deployment host before performing this action.');
@@ -77,19 +79,37 @@ function confirmWithAuthenticator(description) {
   }
   if (actionAuthResolve) return Promise.resolve(null);
   $('#action-auth-description').textContent = description;
-  $('#action-auth-code').value = '';
   $('#action-auth-dialog').showModal();
+  $('#action-auth-confirm').focus();
   return new Promise(resolve => { actionAuthResolve = resolve; });
 }
+
+// Idle sign-out: the server ends the session when the reported idle time passes the limit,
+// and this page signs out on its own as well. Any key, click, scroll or touch counts as activity.
+let lastActivity = Date.now();
+let idleMinutes = 15;
+for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+  document.addEventListener(type, () => { lastActivity = Date.now(); }, { capture: true, passive: true });
+}
+setInterval(() => {
+  if (token && loginMethod === 'authenticator' && Date.now() - lastActivity > idleMinutes * 60000) {
+    void api('/api/logout', { method: 'POST' }).catch(() => {});
+    clearSession();
+    $('#login-error').textContent = `Signed out after ${idleMinutes} minutes of inactivity. Sign in with a new authenticator code.`;
+  }
+}, 15000);
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
     ...options,
-    headers: { Authorization: ['Bearer', token].join(' '), 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: ['Bearer', token].join(' '), 'Content-Type': 'application/json',
+      'X-Idle-Seconds': String(Math.floor((Date.now() - lastActivity) / 1000))
+    },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Request failed');
+  if (!response.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: response.status });
   return data;
 }
 
@@ -127,16 +147,39 @@ function repoLog(repo) {
     const summary = element('summary', 'repo-log-summary');
     const pre = element('pre', 'repo-log-content');
     pre.tabIndex = 0;
-    box.append(summary, pre);
-    view = { box, summary, pre, busy: false, stick: true, top: 0 };
+    const tools = element('div', 'repo-log-tools');
+    const autoLabel = element('label', 'scroll-toggle');
+    const auto = document.createElement('input');
+    auto.type = 'checkbox';
+    auto.checked = true;
+    autoLabel.append(auto, document.createTextNode(' Auto-scroll'));
+    const repoId = repo.id;
+    const clear = action('Clear', 'secondary', async () => {
+      try {
+        await api(`/api/repos/${repoId}/log`, { method: 'DELETE' });
+        current.text = '';
+        pre.textContent = 'No activity yet.';
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+    clear.title = 'Clear this card log. The Activity page keeps its history.';
+    tools.append(autoLabel, clear);
+    box.append(summary, tools, pre);
+    view = { box, summary, pre, auto, busy: false, stick: true, top: 0 };
     const current = view;
-    // Follow new output while the reader is at the bottom; keep their place if they scrolled up.
+    // Auto-scroll follows new output. Scrolling up pauses it; scrolling back to the end resumes.
+    auto.addEventListener('change', () => {
+      current.stick = auto.checked;
+      if (auto.checked) pre.scrollTop = pre.scrollHeight;
+    });
     pre.addEventListener('scroll', () => {
       if (!pre.isConnected || !pre.clientHeight) return;
       current.stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+      auto.checked = current.stick;
       current.top = pre.scrollTop;
     });
-    box.addEventListener('toggle', () => { if (box.open) { current.stick = true; pre.scrollTop = pre.scrollHeight; } });
+    box.addEventListener('toggle', () => { if (box.open && current.stick) pre.scrollTop = pre.scrollHeight; });
     logViews.set(repo.id, view);
   }
   const busy = BUSY.includes(repo.status);
@@ -144,6 +187,7 @@ function repoLog(repo) {
   if ((busy && !view.busy) || openLogNext.delete(repo.id)) {
     view.box.open = true;
     view.stick = true;
+    view.auto.checked = true;
   }
   view.busy = busy;
   view.summary.replaceChildren(
@@ -195,7 +239,8 @@ async function showEnv(repo, name) {
     $('#env-save').disabled = result.tracked;
     $('#env-status').textContent = result.tracked
       ? 'This .env is tracked by Git and cannot be changed here. Remove it from version control before storing secrets.'
-      : result.exists ? 'Existing .env loaded. Saving replaces its contents.' : 'No .env exists yet. Saving creates one.';
+      : result.pending ? 'Showing the .env you entered when adding the repository; it has not been saved yet. Review it and save.'
+        : result.exists ? 'Existing .env loaded. Saving replaces its contents.' : 'No .env exists yet. Saving creates one.';
   } catch (error) {
     if (session === currentSession && requestId === envRequest && $('#env-dialog').open) {
       $('#env-status').textContent = '';
@@ -334,6 +379,7 @@ function render() {
     const buttons = element('div', 'repo-actions');
     const more = document.createElement('details');
     more.className = 'repo-more';
+    more.dataset.repoId = repo.id;
     more.open = openRepoMenus.has(repo.id);
     const moreSummary = element('summary', 'secondary', 'More actions');
     moreSummary.dataset.repoAction = `${repo.id}:menu`;
@@ -345,27 +391,33 @@ function render() {
     });
     const extra = element('div', 'repo-more-list');
     extra.append(
-      action('Settings', 'secondary', () => { selected = repo; $('#settings-error').textContent = ''; $('#edit-script').value = repo.script; $('#edit-owner').value = repo.fileOwner || ''; $('#edit-owner-paths').value = (repo.fileOwnerPaths || []).join(', '); $('#edit-username').value = ''; $('#edit-token').value = ''; $('#edit-token-fields').hidden = repo.authType !== 'token'; $('#settings-dialog').showModal(); }, busy),
+      action('Settings', 'secondary', () => { selected = repo; $('#settings-error').textContent = ''; $('#edit-script').value = repo.script; $('#edit-auto-permissions').checked = repo.autoPermissions !== false; $('#edit-owner').value = repo.fileOwner || ''; $('#edit-owner-paths').value = (repo.fileOwnerPaths || []).join(', '); $('#edit-username').value = ''; $('#edit-token').value = ''; $('#edit-token-fields').hidden = repo.authType !== 'token'; $('#settings-dialog').showModal(); }, busy),
       action('.env', 'secondary', () => showEnv(repo, name), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
       action(repo.watching ? 'Pause' : 'Watch', 'secondary', () => change(repo, 'PATCH', { watching: !repo.watching }), busy),
       ...(repo.authType === 'ssh' ? [action('SSH key', 'secondary', () => showKey(repo), busy)] : []),
       ...(repo.cloneFailed ? [action('Retry clone', 'secondary', () => change(repo, 'POST', undefined, '/clone'), busy)] : []),
       ...(repo.lastDeployed ? [action('View page ↗', 'secondary', () => showProjectPage(repo, name), busy)] : []),
-      ...(repo.lastDeployed || repo.composeAttempted ? [action('Containers', 'secondary', () => openContainers(repo, name), busy)] : []),
       action('Remove', 'secondary repo-remove', () => { selected = repo; $('#delete-title').textContent = `Remove ${name}?`; $('#delete-form').reset(); $('#delete-images').disabled = true; $('#delete-dialog').showModal(); }, busy)
     );
     extra.lastChild.setAttribute('aria-label', `Remove ${name}`);
     for (const button of extra.querySelectorAll('button')) button.dataset.repoAction = `${repo.id}:${button.textContent}`;
     more.append(extra);
     more.addEventListener('click', event => {
-      if (event.target.closest('button')) more.open = false;
+      if (event.target.closest('button')) {
+        more.open = false;
+        openRepoMenus.delete(repo.id);
+      }
     });
     const deployButton = action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed);
     deployButton.dataset.repoAction = `${repo.id}:deploy`;
     const pullButton = action('Pull', 'secondary', () => change(repo, 'POST', undefined, '/pull'), busy || repo.status === 'awaiting-key' || repo.cloneFailed);
     pullButton.title = 'Fetch the latest commits with git pull --ff-only. Does not rebuild or restart containers.';
     pullButton.dataset.repoAction = `${repo.id}:pull`;
-    buttons.append(pullButton, deployButton, more);
+    const cloned = repo.status !== 'awaiting-key' && !repo.cloneFailed && repo.status !== 'cloning';
+    const containersButton = action('Containers', 'secondary', () => openContainers(repo, name), busy || !cloned);
+    containersButton.title = 'Manage containers: logs, restart, console. Available even after a failed deploy.';
+    containersButton.dataset.repoAction = `${repo.id}:containers`;
+    buttons.append(pullButton, deployButton, containersButton, more);
     details.append(info, buttons, repoLog(repo));
     card.append(header, details);
     list.append(card);
@@ -412,9 +464,9 @@ async function refresh(withActivity = true) {
     return true;
   } catch (error) {
     if (session !== currentSession) return;
-    if (error.message === 'Unauthorized') {
+    if (error.status === 401) {
       clearSession();
-      $('#login-error').textContent = 'Session expired. Sign in again.';
+      $('#login-error').textContent = error.message === 'Unauthorized' ? 'Session expired. Sign in again.' : error.message;
     } else notice(`Could not refresh: ${error.message}`);
   } finally {
     refreshing = false;
@@ -435,6 +487,7 @@ async function loadLoginMode() {
     const result = await api('/api/auth/mode');
     if (!['token', 'authenticator'].includes(result.method)) throw new Error('Unknown sign-in method.');
     loginMethod = result.method;
+    if (Number.isFinite(result.idleMinutes)) idleMinutes = result.idleMinutes;
     const useToken = result.method === 'token';
     $('#login-token-fields').hidden = !useToken;
     $('#login-otp-fields').hidden = useToken;
@@ -443,7 +496,7 @@ async function loadLoginMode() {
     $('#login-description').textContent = useToken ? 'Enter your deployment token.' : 'Enter your authenticator code.';
     $('#login-hint').textContent = useToken
       ? 'Set up an authenticator on the deployment host to enable sensitive actions. Sessions last up to eight hours.'
-      : 'Use a fresh code for each sign-in. Sessions last up to eight hours.';
+      : `Use a fresh code for each sign-in. While signed in, actions only ask for confirmation; after ${idleMinutes} minutes without activity you are signed out.`;
     submit.disabled = false;
   } catch (error) {
     $('#login-error').textContent = `Unable to determine sign-in method: ${error.message}. Reload to retry.`;
@@ -458,6 +511,7 @@ $('#login-form').addEventListener('submit', async event => {
   try {
     const result = await api('/api/login', { method: 'POST', body: { token: $('#token').value, code: $('#otp').value } });
     token = result.session;
+    lastActivity = Date.now();
     sessionStorage.setItem('deploySession', token);
     $('#login-dialog').close();
     $('#token').value = '';
@@ -516,9 +570,8 @@ $('#action-auth-form').addEventListener('submit', event => {
 });
 $('#action-auth-cancel').addEventListener('click', () => $('#action-auth-dialog').close());
 $('#action-auth-dialog').addEventListener('close', () => {
-  const code = $('#action-auth-dialog').returnValue === 'confirm' ? $('#action-auth-code').value : null;
+  const code = $('#action-auth-dialog').returnValue === 'confirm' ? true : null;
   $('#action-auth-dialog').returnValue = '';
-  $('#action-auth-code').value = '';
   const resolve = actionAuthResolve;
   actionAuthResolve = null;
   if (resolve) resolve(code);
@@ -632,7 +685,7 @@ $('#add-form').addEventListener('submit', async event => {
   try {
     const type = $('#auth-type').value;
     const auth = type === 'token' ? { type, username: $('#git-username').value, token: $('#git-token').value } : { type };
-    const repo = await api('/api/repos', { method: 'POST', body: { url: $('#url').value, branch: $('#branch').value, script: $('#new-script').value, fileOwner: $('#new-owner').value.trim(), fileOwnerPaths: ownerPaths($('#new-owner-paths').value), auth } });
+    const repo = await api('/api/repos', { method: 'POST', body: { url: $('#url').value, branch: $('#branch').value, script: $('#new-script').value, env: $('#new-env').value, autoPermissions: $('#new-auto-permissions').checked, fileOwner: $('#new-owner').value.trim(), fileOwnerPaths: ownerPaths($('#new-owner-paths').value), auth } });
     $('#add-dialog').close();
     $('#add-form').reset();
     $('#auth-type').dispatchEvent(new Event('change'));
@@ -654,14 +707,15 @@ $('#settings-form').addEventListener('submit', async event => {
     $('#settings-error').textContent = 'Enter both the username and token to rotate credentials.';
     return;
   }
-  const settings = { script: $('#edit-script').value, fileOwner: $('#edit-owner').value.trim(), fileOwnerPaths: ownerPaths($('#edit-owner-paths').value) };
+  const settings = { autoPermissions: $('#edit-auto-permissions').checked, script: $('#edit-script').value, fileOwner: $('#edit-owner').value.trim(), fileOwnerPaths: ownerPaths($('#edit-owner-paths').value) };
   const repo = selected;
   const ownerChanged = settings.fileOwner !== (repo.fileOwner || '') || settings.fileOwnerPaths.join(',') !== (repo.fileOwnerPaths || []).join(',');
   const scriptChanged = settings.script !== (repo.script || '');
-  if (ownerChanged || scriptChanged) {
+  const autoChanged = settings.autoPermissions !== (repo.autoPermissions !== false);
+  if (ownerChanged || scriptChanged || autoChanged) {
     const currentSession = session;
     $('#settings-dialog').close();
-    const what = [scriptChanged && 'the custom script', ownerChanged && 'file ownership'].filter(Boolean).join(' and ');
+    const what = [scriptChanged && 'the custom script', (ownerChanged || autoChanged) && 'permissions'].filter(Boolean).join(' and ');
     const authCode = await confirmWithAuthenticator(`Change ${what} for ${repo.url}. It applies to every later deployment, including automatic ones.`);
     if (!authCode || session !== currentSession) return;
     settings.authCode = authCode;
@@ -682,3 +736,11 @@ setInterval(() => {
   if (slowTick || repos.some(repo => BUSY.includes(repo.status))) void refresh(slowTick);
 }, 1000);
 setInterval(refreshMetrics, 15000);
+// Close an open "More actions" menu when clicking anywhere else.
+document.addEventListener('click', event => {
+  for (const menu of document.querySelectorAll('.repo-more[open]')) {
+    if (menu.contains(event.target)) continue;
+    menu.open = false;
+    if (menu.dataset.repoId) openRepoMenus.delete(menu.dataset.repoId);
+  }
+});

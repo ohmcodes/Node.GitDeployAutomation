@@ -6,7 +6,7 @@ Notes from the session that added container consoles, the Pull button, file owne
 
 1. **Rebuild Git Deploy** (new packages: `ws`, `@xterm/xterm`, `@xterm/addon-fit`):
    `git pull`, then `docker compose up -d --build` in the Git Deploy folder.
-2. **Fix existing custom scripts.** Scripts that don't fit the safe list now **fail their deployment**. In each repository's **Settings**, rewrite them. For example, `npm run migrate` becomes `docker compose exec app npm run migrate`. Saving a script now asks for an authenticator code. Allowed, one per line:
+2. **Fix existing custom scripts.** Scripts that don't fit the safe list now **fail their deployment**. In each repository's **Settings**, rewrite them. For example, `npm run migrate` becomes `docker compose exec app npm run migrate`. Saving a script asks for confirmation. Allowed, one per line:
    ```
    docker compose exec <service> <command>
    docker compose run --rm <service> <command>
@@ -15,10 +15,11 @@ Notes from the session that added container consoles, the Pull button, file owne
    sleep <1-300>
    ```
    No pipes, `&&`, `;`, `$VARS` or redirects. Put complex steps in a script file in the image and call it with `docker compose exec app sh ./scripts/x.sh`.
-3. **Fix the `/data/secrets.json` EACCES error:**
-   1. **Containers → Console** on the app, run `id` (for example `uid=1000 gid=1000`).
-   2. **Settings**: File owner `1000:1000`, Writable folders `data`, then enter the authenticator code.
-   3. **Redeploy** and check the Activity log for a line starting with `File owner 1000:1000:`.
+3. **Fix the `/data/secrets.json` EACCES error:** **Automatic permissions** is on by default, so just **Redeploy**. Then read the Activity log for lines starting with `Automatic permissions:`:
+   - `/data in app now owned by 1000:1000`: fixed.
+   - `no writable mounts to prepare`: `/data` is not a volume or bind mount. Either add one in the app's compose file (`volumes: [app-data:/data]`) or prepare it in the Dockerfile (`RUN mkdir -p /data && chown node:node /data` before `USER node`).
+   - `could not detect the user`: the image has no `id` command. Use **Settings → Advanced** (File owner + Writable folders).
+   - `… left unchanged`: the log says why (whole-repo mount, or a folder with Compose files or Dockerfiles).
 4. **Reverse proxy** (if used). Consoles need WebSockets and the original Host:
    ```nginx
    proxy_set_header Host $host;
@@ -35,10 +36,14 @@ Notes from the session that added container consoles, the Pull button, file owne
 
 ## Open decisions
 
-- **Automatic permissions per repo:** should Git Deploy read each repo's compose file (`docker compose config`), find each service's user and its bind mounts and named volumes, and fix ownership automatically on every deploy? If yes, should it be on by default with a per-repo switch? For now, File owner plus Writable folders covers this manually.
+- **Idle sign-out time:** 15 minutes by default (`IDLE_TIMEOUT_MINUTES`). Adjust if it is too short or too long.
+- **Code-free actions vs. a stolen session:** after the authenticator sign-in, actions need only a confirmation. Someone who steals the session token (for example through XSS or a shared machine) can skip the browser's idle report and keep it alive for the full 8 hours with deploy, delete and root-console rights. Option ("sudo mode"): allow code-free actions only for a fixed time after the last real code (for example 60 minutes), then ask for a code once.
 - **`COMPOSE_*` keys in the `.env` editor:** a repo's `.env` can set `COMPOSE_PROJECT_NAME` to *another* repo's project. That repo's script could then act on the other project's service with the same name. Git Deploy's own project is already protected. Options: block `COMPOSE_*` keys in the editor (some people set the project name there on purpose), or require an authenticator code for `.env` edits.
 
 ## Known limitations (accepted for now)
+
+- Automatic permissions runs `chown -R` over each writable volume on every deploy, including watcher deploys. Large media volumes make deploys slower and change file timestamps (ctime) for backup tools. Possible improvement: only change files not already owned by the service user.
+- Automatic permissions checks that a bind-mounted folder is not a symlink just before the deploy. A compromised app could swap one in during the seconds between that check and the mount.
 
 - Console tickets travel in the WebSocket URL, so a proxy access log could record one. They are single-use and expire in 30 seconds.
 - Consoles do not work with TLS (`DOCKER_TLS_VERIFY`) or `ssh://` Docker hosts.

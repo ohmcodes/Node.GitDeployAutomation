@@ -87,11 +87,11 @@
           <h2>2. Configure and deploy</h2><p>Expand the repository card and open <strong>More actions</strong> to find <strong>.env</strong>, settings, containers and watcher controls. Select <strong>Deploy</strong> to pull the branch and run Docker Compose from its own clone; the card expands and its <strong>Activity</strong> log opens and follows the output live. <strong>Pull</strong> only updates the clone without restarting anything. A successful first deployment enables polling; use Pause to stop checks.</p>
           <p>After deployment, <strong>Redeploy</strong> forces Compose to recreate services. <strong>View page</strong> uses the repository .env DOMAIN, or lets you choose a published TCP port using HTTP. Ensure the chosen service is a web page.</p>
           <h2>Custom scripts</h2><p>Scripts run after Compose starts, one safe command per line: <code>docker compose exec &lt;service&gt; &lt;command&gt;</code>, <code>docker compose run --rm &lt;service&gt; &lt;command&gt;</code>, <code>docker compose restart [service]</code>, <code>echo</code> and <code>sleep</code>. They run inside your project's containers, never in Git Deploy, and without a shell, so pipes, redirects, variables and <code>&amp;&amp;</code> are rejected. Put complex steps in a script file inside your image and call it with exec.</p>
-          <h2>Write permissions</h2><p>If your app runs as a non-root user and fails with <code>EACCES</code> on a bind-mounted folder, set <strong>File owner</strong> (the UID:GID from <code>docker compose exec &lt;service&gt; id</code>) and <strong>Writable folders</strong> (for example <code>data</code>) in Settings, then redeploy.</p>
-          <h2>Container consoles</h2><p>In <strong>Containers</strong>, <strong>Console</strong> opens bash (or sh) in a running container; <strong>Root console</strong> opens it as root. Each needs a fresh authenticator code. Changes are lost when the container is recreated.</p>
+          <h2>Write permissions</h2><p><strong>Automatic permissions</strong> (on by default) gives each service's volumes and bind-mounted folders to the user that service runs as, before every deployment, so apps that run as non-root can write data, config and secrets. Check the Activity log for what changed or was skipped. A folder that exists only inside the image must be prepared in its Dockerfile.</p>
+          <h2>Container consoles</h2><p>In <strong>Containers</strong>, <strong>Console</strong> opens bash (or sh) in a running container; <strong>Root console</strong> opens it as root. Each asks for confirmation. Changes are lost when the container is recreated.</p>
           <h2>3. Existing deployments</h2><p>Git Deploy does not automatically attach to existing containers. Check the Compose project name, environment files, ports, and persistent paths before deploying from the new clone; otherwise a second project or conflicting services may be created.</p>
           <h2>4. Removing a repository</h2><p>Removal can optionally run Compose down and remove locally built images. This can affect any deployment sharing the Compose project name or image. Volumes are not removed. Back up data before proceeding.</p>
-          <h2>Security and operations</h2><p>Set up an authenticator on the deployment host before manual deploys, repository deletion, custom script and file owner changes, consoles, or container stop, kill, restart or pause. These actions require a fresh code. Codes cannot be reused, even after sign-in; wait for the next code. Automatic watcher deployments do not prompt.</p><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
+          <h2>Security and operations</h2><p>Set up an authenticator on the deployment host before manual deploys, repository deletion, custom script and file owner changes, consoles, or container stop, kill, restart or pause. Sign in with an authenticator code; while you stay active these actions only ask for confirmation. After a period of inactivity you are signed out and need a new code. Automatic watcher deployments do not prompt.</p><p>This is an administrator-only tool with Docker host access. Protect the token, data directory, credentials and logs; use HTTPS through a secure proxy or an SSH tunnel. Host metrics require a read-only mount of the local Docker host's proc filesystem.</p>
         </section>
         <footer>GIT DEPLOY <span>·</span> A LITTLE LESS WORK, A LOT MORE FLOW. <span>·</span> <a href="https://github.com/ohmcodes/Node.GitDeployAutomation" target="_blank" rel="noopener noreferrer">GITHUB SOURCE ↗</a></footer>
       </div>
@@ -108,11 +108,9 @@
   </dialog>
   <dialog id="action-auth-dialog">
     <form id="action-auth-form">
-      <div class="dialog-head"><div><div class="eyebrow">SECURITY CONFIRMATION</div><h2>Confirm sensitive action</h2><p id="action-auth-description"></p></div></div>
-      <label for="action-auth-code">Authenticator code</label>
-      <input id="action-auth-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
-      <p class="hint">Each code can be used only once, including at sign-in. Wait for a new code if you just used one.</p>
-      <div class="actions"><button type="button" class="secondary" id="action-auth-cancel">Cancel</button><button type="submit" class="primary">Confirm action</button></div>
+      <div class="dialog-head"><div><div class="eyebrow">CONFIRM</div><h2>Are you sure?</h2><p id="action-auth-description"></p></div></div>
+      <p class="hint">You are signed in with your authenticator, so no code is needed. You will be signed out after a period of inactivity.</p>
+      <div class="actions"><button type="button" class="secondary" id="action-auth-cancel">Cancel</button><button type="submit" class="primary" id="action-auth-confirm">Yes, continue</button></div>
     </form>
   </dialog>
   <dialog id="add-dialog">
@@ -120,27 +118,37 @@
       <div class="dialog-head"><div><div class="eyebrow">NEW PROJECT</div><h2>Add repository</h2><p>Connect a Git repository to your workspace.</p></div><button type="button" class="close" data-close="add-dialog" aria-label="Close">×</button></div>
       <label for="url">Repository URL</label><input id="url" type="url" placeholder="https://github.com/you/project.git" required>
       <label for="branch">Branch</label><input id="branch" value="main" required>
-      <label for="new-script">Custom script <span class="muted">(optional)</span></label><textarea id="new-script" rows="3" placeholder="e.g. docker compose exec app npm run migrate"></textarea>
-      <label for="new-owner">File owner <span class="muted">(optional UID:GID)</span></label><input id="new-owner" autocomplete="off" pattern="\d{1,10}:\d{1,10}" placeholder="e.g. 1000:1000">
-      <label for="new-owner-paths">Writable folders <span class="muted">(comma-separated, e.g. data, storage/uploads)</span></label><input id="new-owner-paths" autocomplete="off" placeholder="e.g. data">
-      <p class="hint">The user the deployed containers run as, and the bind-mounted folders it must write to. Before each deployment those folders are created if missing and handed to that user; the saved .env is too. Use data folders only, never folders holding Compose files or Dockerfiles.</p>
       <label for="auth-type">Repository authentication</label><select id="auth-type"><option value="none">Existing Git / SSH configuration</option><option value="token">HTTPS token</option><option value="ssh">Generate SSH deploy key</option></select>
       <div id="token-fields" hidden><label for="git-username">Git username</label><input id="git-username" autocomplete="off" placeholder="Git provider username"><label for="git-token">Git access token</label><input id="git-token" type="password" autocomplete="new-password"><p class="hint">Stored on the server in the protected data directory. Use a scoped read-only token.</p></div>
       <p id="ssh-hint" class="hint" hidden>A key will be generated. Add its public key to the provider and configure verified host keys before starting the clone.</p>
+      <label for="new-env">Environment file (.env) <span class="muted">(optional)</span></label><textarea id="new-env" rows="5" spellcheck="false" placeholder="DOMAIN=app.example.com&#10;DATABASE_URL=…"></textarea>
+      <p class="hint">Saved as the repository's root .env as soon as the clone finishes (owner-only). Make sure .env is not tracked in Git.</p>
+      <label class="scroll-toggle"><input id="new-auto-permissions" type="checkbox" checked> Automatic permissions</label>
+      <p class="hint">Before each deployment, writable folders and volumes are given to the user each service runs as, so non-root apps can write to them.</p>
+      <label for="new-script">Custom script <span class="muted">(optional)</span></label><textarea id="new-script" rows="3" placeholder="e.g. docker compose exec app npm run migrate"></textarea>
       <p class="hint">Runs after Docker Compose starts. Safe commands only, one per line: <code>docker compose exec &lt;service&gt; …</code>, <code>docker compose run --rm &lt;service&gt; …</code>, <code>docker compose restart [service]</code>, <code>echo</code> and <code>sleep</code>. No pipes, redirects, variables or chaining.</p>
+      <details class="advanced"><summary>Advanced: manual file owner</summary>
+        <label for="new-owner">File owner <span class="muted">(UID:GID)</span></label><input id="new-owner" autocomplete="off" pattern="\d{1,10}:\d{1,10}" placeholder="e.g. 1000:1000">
+        <label for="new-owner-paths">Writable folders <span class="muted">(comma-separated)</span></label><input id="new-owner-paths" autocomplete="off" placeholder="e.g. data">
+        <p class="hint">Only needed when automatic permissions cannot detect a service's user. Data folders only.</p>
+      </details>
       <p id="add-error" class="error" role="alert"></p>
       <button class="primary wide" type="submit">Clone repository →</button>
     </form>
   </dialog>
   <dialog id="settings-dialog">
     <form id="settings-form">
-      <div class="dialog-head"><div><div class="eyebrow">PROJECT SETTINGS</div><h2>Custom script</h2><p>Safe commands run after Compose starts on each deployment.</p></div><button type="button" class="close" data-close="settings-dialog" aria-label="Close">×</button></div>
-      <label for="edit-script">Shell commands</label><textarea id="edit-script" rows="7" placeholder="docker compose exec app npm run migrate&#10;docker compose restart worker"></textarea>
-      <label for="edit-owner">File owner <span class="muted">(UID:GID, blank to not change ownership)</span></label><input id="edit-owner" autocomplete="off" pattern="\d{1,10}:\d{1,10}" placeholder="e.g. 1000:1000">
-      <label for="edit-owner-paths">Writable folders <span class="muted">(comma-separated)</span></label><input id="edit-owner-paths" autocomplete="off" placeholder="e.g. data, storage/uploads">
-      <p class="hint">Changing these needs a fresh authenticator code. Applied before Docker Compose starts on each deployment. Find the UID with <code>docker compose exec &lt;service&gt; id</code>.</p>
-      <div id="edit-token-fields" hidden><label for="edit-username">New Git username</label><input id="edit-username" autocomplete="off"><label for="edit-token">New Git access token</label><input id="edit-token" type="password" autocomplete="new-password"><p class="hint">Leave both blank to keep the current token. Enter both to rotate it.</p></div>
+      <div class="dialog-head"><div><div class="eyebrow">PROJECT SETTINGS</div><h2>Settings</h2><p>Applied on every later deployment, including automatic ones.</p></div><button type="button" class="close" data-close="settings-dialog" aria-label="Close">×</button></div>
+      <label class="scroll-toggle"><input id="edit-auto-permissions" type="checkbox"> Automatic permissions</label>
+      <p class="hint">Before each deployment, writable folders and volumes are given to the user each service runs as. The activity log shows what was changed or skipped.</p>
+      <label for="edit-script">Custom script</label><textarea id="edit-script" rows="6" placeholder="docker compose exec app npm run migrate&#10;docker compose restart worker"></textarea>
       <p class="hint">Allowed, one per line: <code>docker compose exec &lt;service&gt; …</code>, <code>docker compose run --rm &lt;service&gt; …</code>, <code>docker compose restart [service]</code>, <code>echo</code>, <code>sleep</code>. Commands run inside the project's containers, not in Git Deploy. No pipes, redirects, variables or chaining.</p>
+      <details class="advanced"><summary>Advanced: manual file owner</summary>
+        <label for="edit-owner">File owner <span class="muted">(UID:GID, blank for none)</span></label><input id="edit-owner" autocomplete="off" pattern="\d{1,10}:\d{1,10}" placeholder="e.g. 1000:1000">
+        <label for="edit-owner-paths">Writable folders <span class="muted">(comma-separated)</span></label><input id="edit-owner-paths" autocomplete="off" placeholder="e.g. data, storage/uploads">
+        <p class="hint">Only needed when automatic permissions cannot detect a service's user.</p>
+      </details>
+      <div id="edit-token-fields" hidden><label for="edit-username">New Git username</label><input id="edit-username" autocomplete="off"><label for="edit-token">New Git access token</label><input id="edit-token" type="password" autocomplete="new-password"><p class="hint">Leave both blank to keep the current token. Enter both to rotate it.</p></div>
       <p id="settings-error" class="error" role="alert"></p>
       <button class="primary wide" type="submit">Save settings</button>
     </form>

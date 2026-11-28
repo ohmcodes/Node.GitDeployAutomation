@@ -69,13 +69,13 @@ function stream(repo, text) {
   }, 1000);
 }
 
-const { credentialsPath, location, run, clone, pull, deploy, check, pageDomain, publishedPorts, dockerOutput, managedContainers } =
+const { writeEnv, savePendingEnv, pendingEnvPath, credentialsPath, location, run, clone, pull, deploy, check, pageDomain, publishedPorts, dockerOutput, managedContainers } =
   createRepositoryService({ reposDir, credentialsDir, active, save, append, stream, exec });
 const { metrics } = createMetricsService({ getRepos: () => repos, location, exec });
 
 const auth = createSessions({ root, token, send, body });
 const consoles = createConsoles({ auth, repos, append });
-const route = createRouter({ repos, getActivity: () => activity, active, credentialsDir, save, append, exec,
+const route = createRouter({ repos, getActivity: () => activity, active, credentialsDir, save, append, exec, writeEnv, savePendingEnv, pendingEnvPath,
   credentialsPath, location, run, clone, pull, deploy, pageDomain, publishedPorts, dockerOutput, managedContainers,
   metrics, validUrl, validBranch, validTokenAuth, auth, send, body, optionalBody, consoles });
 const server = createServer(route);

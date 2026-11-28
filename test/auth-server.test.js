@@ -93,6 +93,11 @@ test('login switches from token to authenticator and protects sensitive actions'
   for (let count = 0; count < 5; count++) assert.equal((await remove(secondSession, 'bad')).status, 403);
   assert.equal((await remove(secondSession, nextCode)).status, 429);
   assert.equal((await (await fetch(`${url}/api/repos`, { headers: { Authorization: `Bearer ${secondSession}` } })).json()).length, 1);
+  // Idle sign-out: a browser reporting more than the limit (15 minutes) ends the session for good.
+  const idle = await fetch(`${url}/api/repos`, { headers: { Authorization: `Bearer ${secondSession}`, 'X-Idle-Seconds': String(16 * 60) } });
+  assert.equal(idle.status, 401);
+  assert.match((await idle.json()).error, /inactivity/);
+  assert.equal((await fetch(`${url}/api/repos`, { headers: { Authorization: `Bearer ${secondSession}` } })).status, 401);
   writeAuth(dir, { ...state, generation: 'c'.repeat(32) });
   assert.equal((await fetch(`${url}/api/repos`, { headers: { Authorization: `Bearer ${secondSession}` } })).status, 401);
   await stop();

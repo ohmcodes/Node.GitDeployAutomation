@@ -102,3 +102,23 @@ dialog.console-dialog{width:min(1100px,calc(100% - 32px))}.console-terminal{heig
 .repo-log{flex-basis:100%;width:100%;margin-top:4px}.repo-log-summary{cursor:pointer;font-size:12px;font-weight:700;color:#a6a9b3;padding:6px 0;list-style-position:inside}.repo-log-summary .pulse{margin-left:6px}.repo-log-content{margin:6px 0 0;max-height:320px;min-height:80px;font-size:11px;line-height:1.5}
 .repo-details{flex-wrap:wrap}
 html[data-theme="light"] .repo-log-summary,html[data-theme="sand"] .repo-log-summary{color:#536271}
+/* More actions: a dropdown menu aligned with the card's action buttons */
+.repo-actions{align-items:center}
+.repo-more{position:relative;flex:0 0 auto}
+.repo-more summary{display:inline-flex;align-items:center;gap:6px}
+.repo-more summary::after{content:'▾';font-size:10px}
+.repo-more[open] summary{border-color:#6b6d77}
+.repo-more-list{position:absolute;right:0;top:calc(100% + 6px);z-index:30;flex-direction:column;flex-wrap:nowrap;min-width:190px;margin:0;padding:6px;background:#18191f;border:1px solid #383a43;border-radius:9px;box-shadow:0 12px 40px #0008}
+.repo-more-list button{width:100%;border-color:transparent;background:transparent}
+.repo-more-list button:hover:not(:disabled){background:#25262e;border-color:#34353e}
+html[data-theme="light"] .repo-more-list,html[data-theme="sand"] .repo-more-list{background:#fff;border-color:#cbd5da;box-shadow:0 12px 30px #18243322}
+html[data-theme="sand"] .repo-more-list{background:#fffaf1}
+html[data-theme="light"] .repo-more-list button:hover:not(:disabled),html[data-theme="sand"] .repo-more-list button:hover:not(:disabled){background:#eef2f5}
+@media(max-width:700px){.repo-more-list{right:auto;left:0}}
+/* Card activity log toolbar */
+.repo-log-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:4px}
+.repo-log-tools .scroll-toggle{margin:0;font-size:12px}
+.repo-log-tools .secondary{padding:6px 10px}
+/* Advanced (manual) settings */
+details.advanced{margin-top:16px;border-top:1px solid #30313a;padding-top:10px}
+details.advanced>summary{cursor:pointer;font-size:12px;font-weight:700;color:#a6a9b3}

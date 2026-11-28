@@ -221,7 +221,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.equal((await request(pageUrl)).status, 409);
   const envUrl = `/api/repos/${id}/env`;
   assert.equal((await request(envUrl, 'GET', undefined, false)).status, 401);
-  assert.deepEqual(await (await request(envUrl)).json(), { exists: false, tracked: false, content: '' });
+  assert.deepEqual(await (await request(envUrl)).json(), { exists: false, tracked: false, pending: false, content: '' });
   assert.equal((await request(envUrl, 'PUT', { content: 'a'.repeat(65537) })).status, 400);
   assert.equal((await request(envUrl, 'PUT', { content: 'BAD=\0' })).status, 400);
   const envContent = 'DATABASE_PASSWORD=test-secret-123\nLABEL=héllo\n';
@@ -230,7 +230,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   const envPath = path.join(dir, 'data', 'repos', id, '.env');
   assert.equal(fs.readFileSync(envPath, 'utf8'), envContent);
   if (process.platform !== 'win32') assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
-  assert.deepEqual(await (await request(envUrl)).json(), { exists: true, tracked: false, content: envContent });
+  assert.deepEqual(await (await request(envUrl)).json(), { exists: true, tracked: false, pending: false, content: envContent });
   fs.writeFileSync(path.join(dir, 'tracked-env'), '');
   assert.equal((await (await request(envUrl)).json()).tracked, true);
   assert.equal((await request(envUrl, 'PUT', { content: 'replacement' })).status, 409);
@@ -248,7 +248,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
     fs.unlinkSync(envPath);
   }
   fs.renameSync(`${envPath}.backup`, envPath);
-  assert.equal((await request(`/api/repos/${id}/deploy`, 'POST', undefined, true, null)).status, 403);
+  assert.equal((await request(`/api/repos/${id}/deploy`, 'POST', undefined, true, totp(secret, readAuth(dataDir).lastCounter))).status, 403);
   assert.equal((await request(`/api/repos/${id}/deploy`, 'POST')).status, 202);
   let repo = await waitFor(async () => { const item = await current(id); return item.status === 'deployed' && item; });
   assert.equal(repo.commit, 'first-commit');
@@ -268,7 +268,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.match((await (await request(`${containersUrl}/aaaaaaaaaaaa/logs`)).json()).output, /container output/);
   assert.match((await (await request(`${containersUrl}/aaaaaaaaaaaa/processes`)).json()).output, /PID COMMAND/);
   assert.equal((await (await request(`${containersUrl}/aaaaaaaaaaaa/inspect`)).json()).data.HostConfig.RestartPolicy.Name, 'always');
-  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST', undefined, true, null)).status, 403);
+  assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST', undefined, true, '000000')).status, 403);
   assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST')).status, 200);
   assert.equal((await request(`${containersUrl}/aaaaaaaaaaaa/stop`, 'POST', undefined, true, totp(secret, readAuth(dataDir).lastCounter))).status, 403);
   assert.equal(fs.readFileSync(path.join(dir, 'container-actions'), 'utf8').trim(), 'stop aaaaaaaaaaaa');
@@ -338,7 +338,9 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.ok(repo.lastChecked);
   assert.equal((repo.log.match(/^\$ docker compose up -d --build --force-recreate$/gm) || []).length, 1);
   assert.equal((await request(`/api/repos/${id}`, 'PATCH', { script: 'sh -c "id"' })).status, 400);
-  assert.equal((await request(`/api/repos/${id}`, 'PATCH', { script: 'echo no-code' }, true, null)).status, 403);
+  // An active authenticator session only needs confirmation (no code); a wrong code is still refused.
+  assert.equal((await request(`/api/repos/${id}`, 'PATCH', { script: 'echo wrong-code' }, true, '000000')).status, 403);
+  assert.equal((await request(`/api/repos/${id}`, 'PATCH', { script: 'echo no-code' }, true, null)).status, 200);
   assert.equal((await request(`/api/repos/${id}`, 'PATCH', { watching: false, script: 'echo updated' })).status, 200);
   repo = await current(id);
   assert.equal(repo.watching, false);
@@ -353,7 +355,7 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.match(repo.message, /not a fast-forward/);
   assert.equal(repo.commit, 'second-commit');
   fs.writeFileSync(path.join(dir, 'fail-down'), '');
-  assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true }, true, null)).status, 403);
+  assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true }, true, '000000')).status, 403);
   assert.ok(await current(id));
   assert.equal((await request(`/api/repos/${id}`, 'DELETE', { containers: true, images: true })).status, 500);
   assert.ok(await current(id));
