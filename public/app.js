@@ -12,7 +12,6 @@ let token = sessionStorage.getItem('deploySession') || '';
 let repos = [];
 let filter = preferences.filter;
 let selected = null;
-let logRepoId = null;
 let keyRepoId = null;
 let envRepoId = null;
 let envRequest = 0;
@@ -27,6 +26,12 @@ let loginMethod = null;
 const expandedRepos = new Set(preferences.expandedRepos);
 const openRepoMenus = new Set();
 const repoIcons = new Map();
+// Per-repository live activity logs. The elements are kept across renders so scroll
+// position, text selection and open/closed state survive the 1-3 second refresh.
+const logViews = new Map();
+// Logs to open on the next render, after the user starts Deploy, Pull or Retry clone.
+const openLogNext = new Set();
+const BUSY = ['cloning', 'pulling', 'deploying', 'rebuilding', 'checking', 'removing'];
 
 function showRepoIcon(icon, repo) {
   const cached = repoIcons.get(repo.id);
@@ -44,7 +49,7 @@ function showRepoIcon(icon, repo) {
     }
     return;
   }
-  if (['cloning', 'deploying', 'rebuilding', 'checking', 'removing', 'awaiting-key'].includes(repo.status)) return;
+  if (['cloning', 'pulling', 'deploying', 'rebuilding', 'checking', 'removing', 'awaiting-key'].includes(repo.status)) return;
   const entry = { version, icon: null };
   repoIcons.set(repo.id, entry);
   const currentSession = session;
@@ -112,6 +117,56 @@ function updateLog(node, value, auto) {
   const top = node.scrollTop;
   node.textContent = value;
   node.scrollTop = auto ? node.scrollHeight : top;
+}
+
+function repoLog(repo) {
+  let view = logViews.get(repo.id);
+  if (!view) {
+    const box = document.createElement('details');
+    box.className = 'repo-log';
+    const summary = element('summary', 'repo-log-summary');
+    const pre = element('pre', 'repo-log-content');
+    pre.tabIndex = 0;
+    box.append(summary, pre);
+    view = { box, summary, pre, busy: false, stick: true, top: 0 };
+    const current = view;
+    // Follow new output while the reader is at the bottom; keep their place if they scrolled up.
+    pre.addEventListener('scroll', () => {
+      if (!pre.isConnected || !pre.clientHeight) return;
+      current.stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+      current.top = pre.scrollTop;
+    });
+    box.addEventListener('toggle', () => { if (box.open) { current.stick = true; pre.scrollTop = pre.scrollHeight; } });
+    logViews.set(repo.id, view);
+  }
+  const busy = BUSY.includes(repo.status);
+  // Open the log as soon as an operation starts, so deploy output is visible right away.
+  if ((busy && !view.busy) || openLogNext.delete(repo.id)) {
+    view.box.open = true;
+    view.stick = true;
+  }
+  view.busy = busy;
+  view.summary.replaceChildren(
+    ...(busy ? [element('span', 'pulse')] : []),
+    document.createTextNode(busy ? `Activity · live (${repo.status})` : 'Activity')
+  );
+  const text = repo.log || 'No activity yet.';
+  const old = view.text || '';
+  if (text !== old) {
+    // Append only the new part when possible: replacing the whole text clears any selection.
+    if (old && text.startsWith(old)) view.pre.append(text.slice(old.length));
+    else view.pre.textContent = text;
+    view.text = text;
+  }
+  return view.box;
+}
+
+// Cards are rebuilt on every change, which detaches the log and resets its scroll position.
+function restoreLogScroll() {
+  for (const view of logViews.values()) {
+    if (!view.pre.isConnected || !view.box.open) continue;
+    view.pre.scrollTop = view.stick ? view.pre.scrollHeight : view.top;
+  }
 }
 
 function showKey(repo) {
@@ -199,6 +254,14 @@ async function change(repo, method, body, suffix = '') {
       body = { ...body, authCode };
     }
     await api(`/api/repos/${repo.id}${suffix}`, { method, body });
+    if (method === 'POST' && ['/deploy', '/pull', '/clone'].includes(suffix)) {
+      // Show the card and its live log straight away, even if the operation already finished.
+      expandedRepos.add(repo.id);
+      preferences.expandedRepos = [...expandedRepos];
+      saveDisplay();
+      openLogNext.add(repo.id);
+      repoSnapshot = null;
+    }
     notice('');
     await refresh();
   } catch (error) {
@@ -224,7 +287,7 @@ function render() {
     return;
   }
   for (const repo of shown) {
-    const busy = ['cloning', 'deploying', 'rebuilding', 'checking', 'removing'].includes(repo.status);
+    const busy = BUSY.includes(repo.status);
     const recent = repo.lastPulled && Date.now() - Date.parse(repo.lastPulled) < 60000;
     const card = element('article', `repo${repo.status === 'error' ? ' is-error' : repo.status === 'rebuilding' ? ' is-rebuilding' : !repo.watching ? ' is-paused' : recent ? ' is-recent' : ''}`);
     const icon = element('div', 'repo-icon', '⌘');
@@ -250,6 +313,7 @@ function render() {
       preferences.expandedRepos = [...expandedRepos];
       saveDisplay();
       updateToggle();
+      if (!details.hidden) restoreLogScroll();
     });
     toggle.dataset.repoToggle = repo.id;
     toggle.setAttribute('aria-controls', details.id);
@@ -281,8 +345,7 @@ function render() {
     });
     const extra = element('div', 'repo-more-list');
     extra.append(
-      action('Activity', 'secondary', () => { logRepoId = repo.id; $('#log-title').textContent = name; updateLog($('#log-content'), repo.log || 'No activity yet.', true); $('#log-dialog').showModal(); $('#log-content').scrollTop = $('#log-content').scrollHeight; }),
-      action('Settings', 'secondary', () => { selected = repo; $('#settings-error').textContent = ''; $('#edit-script').value = repo.script; $('#edit-username').value = ''; $('#edit-token').value = ''; $('#edit-token-fields').hidden = repo.authType !== 'token'; $('#settings-dialog').showModal(); }, busy),
+      action('Settings', 'secondary', () => { selected = repo; $('#settings-error').textContent = ''; $('#edit-script').value = repo.script; $('#edit-owner').value = repo.fileOwner || ''; $('#edit-owner-paths').value = (repo.fileOwnerPaths || []).join(', '); $('#edit-username').value = ''; $('#edit-token').value = ''; $('#edit-token-fields').hidden = repo.authType !== 'token'; $('#settings-dialog').showModal(); }, busy),
       action('.env', 'secondary', () => showEnv(repo, name), busy || repo.status === 'awaiting-key' || repo.cloneFailed),
       action(repo.watching ? 'Pause' : 'Watch', 'secondary', () => change(repo, 'PATCH', { watching: !repo.watching }), busy),
       ...(repo.authType === 'ssh' ? [action('SSH key', 'secondary', () => showKey(repo), busy)] : []),
@@ -299,8 +362,11 @@ function render() {
     });
     const deployButton = action(repo.lastDeployed ? 'Redeploy ↗' : 'Deploy ↗', 'deploy', () => change(repo, 'POST', undefined, '/deploy'), busy || repo.status === 'awaiting-key' || repo.cloneFailed);
     deployButton.dataset.repoAction = `${repo.id}:deploy`;
-    buttons.append(deployButton, more);
-    details.append(info, buttons);
+    const pullButton = action('Pull', 'secondary', () => change(repo, 'POST', undefined, '/pull'), busy || repo.status === 'awaiting-key' || repo.cloneFailed);
+    pullButton.title = 'Fetch the latest commits with git pull --ff-only. Does not rebuild or restart containers.';
+    pullButton.dataset.repoAction = `${repo.id}:pull`;
+    buttons.append(pullButton, deployButton, more);
+    details.append(info, buttons, repoLog(repo));
     card.append(header, details);
     list.append(card);
     if (focusedToggle === repo.id) toggle.focus();
@@ -309,17 +375,20 @@ function render() {
       if (previousFocus && !previousFocus.disabled) previousFocus.focus();
     }
   }
+  restoreLogScroll();
   renderRepoMetrics();
 }
 
-async function refresh() {
+async function refresh(withActivity = true) {
   if (!token || refreshing) return;
   refreshing = true;
   const currentSession = session;
   try {
     const result = await api('/api/repos');
     if (session !== currentSession) return;
-    const snapshot = JSON.stringify(result);
+    // Log text changes every second during a deploy; keep it out of the snapshot so cards are
+    // rebuilt only for real changes, and update the logs in place otherwise.
+    const snapshot = JSON.stringify(result.map(({ log, ...rest }) => rest));
     const recentExpired = result.some(repo => repo.lastPulled && Date.parse(repo.lastPulled) + 60000 > renderedAt && Date.parse(repo.lastPulled) + 60000 <= Date.now());
     repos = result;
     const repoIds = new Set(repos.map(repo => repo.id));
@@ -327,13 +396,14 @@ async function refresh() {
     preferences.expandedRepos = [...expandedRepos];
     for (const id of openRepoMenus) if (!repoIds.has(id)) openRepoMenus.delete(id);
     for (const id of repoIcons.keys()) if (!repoIds.has(id)) repoIcons.delete(id);
+    for (const id of logViews.keys()) if (!repoIds.has(id)) logViews.delete(id);
     if (snapshot !== repoSnapshot || recentExpired) render();
-    repoSnapshot = snapshot;
-    if ($('#log-dialog').open) {
-      const current = repos.find(repo => repo.id === logRepoId);
-      if (current) updateLog($('#log-content'), current.log || 'No activity yet.', $('#log-autoscroll').checked);
+    else {
+      for (const repo of repos) if (logViews.has(repo.id)) repoLog(repo);
+      restoreLogScroll();
     }
-    if (page === 'activity') {
+    repoSnapshot = snapshot;
+    if (page === 'activity' && withActivity) {
       const entries = await api('/api/activity');
       if (session !== currentSession) return;
       updateLog($('#feed-content'), entries.map(entry => `[${new Date(entry.time).toLocaleString()}] ${entry.url}\n${entry.text}`).join('\n') || 'No activity yet.', $('#feed-autoscroll').checked);
@@ -412,12 +482,13 @@ function clearSession() {
   repoSnapshot = null;
   resetMetrics();
   $('#feed-content').textContent = 'No activity yet.';
-  $('#log-content').textContent = '';
+  logViews.clear();
+  openLogNext.clear();
   if ($('#env-dialog').open) $('#env-dialog').close();
   if ($('#page-dialog').open) $('#page-dialog').close();
   if ($('#containers-dialog').open) $('#containers-dialog').close();
   if ($('#action-auth-dialog').open) $('#action-auth-dialog').close();
-  for (const id of ['add-dialog', 'settings-dialog', 'log-dialog', 'key-dialog', 'delete-dialog']) {
+  for (const id of ['console-dialog', 'add-dialog', 'settings-dialog', 'key-dialog', 'delete-dialog']) {
     if ($(`#${id}`).open) $(`#${id}`).close();
   }
   $('#edit-token').value = '';
@@ -471,10 +542,10 @@ $('#env-form').addEventListener('submit', async event => {
   $('#env-save').disabled = true;
   $('#env-error').textContent = '';
   try {
-    await api(`/api/repos/${repoId}/env`, { method: 'PUT', body: { content: $('#env-content').value } });
+    const saved = await api(`/api/repos/${repoId}/env`, { method: 'PUT', body: { content: $('#env-content').value } });
     if (session !== currentSession || requestId !== envRequest || !$('#env-dialog').open) return;
     $('#env-dialog').close();
-    notice('Environment file saved. Deploy the repository to apply changes.');
+    notice(saved.warning || 'Environment file saved. Deploy the repository to apply changes.');
   } catch (error) {
     if (session === currentSession && requestId === envRequest && $('#env-dialog').open) {
       $('#env-error').textContent = error.message;
@@ -561,7 +632,7 @@ $('#add-form').addEventListener('submit', async event => {
   try {
     const type = $('#auth-type').value;
     const auth = type === 'token' ? { type, username: $('#git-username').value, token: $('#git-token').value } : { type };
-    const repo = await api('/api/repos', { method: 'POST', body: { url: $('#url').value, branch: $('#branch').value, script: $('#new-script').value, auth } });
+    const repo = await api('/api/repos', { method: 'POST', body: { url: $('#url').value, branch: $('#branch').value, script: $('#new-script').value, fileOwner: $('#new-owner').value.trim(), fileOwnerPaths: ownerPaths($('#new-owner-paths').value), auth } });
     $('#add-dialog').close();
     $('#add-form').reset();
     $('#auth-type').dispatchEvent(new Event('change'));
@@ -572,6 +643,9 @@ $('#add-form').addEventListener('submit', async event => {
     $('#add-error').textContent = error.message;
   }
 });
+function ownerPaths(value) {
+  return value.split(',').map(item => item.trim().replace(/^\.\//, '').replace(/\/+$/, '')).filter(Boolean);
+}
 $('#settings-form').addEventListener('submit', async event => {
   event.preventDefault();
   const username = $('#edit-username').value;
@@ -580,13 +654,31 @@ $('#settings-form').addEventListener('submit', async event => {
     $('#settings-error').textContent = 'Enter both the username and token to rotate credentials.';
     return;
   }
-  const settings = { script: $('#edit-script').value };
+  const settings = { script: $('#edit-script').value, fileOwner: $('#edit-owner').value.trim(), fileOwnerPaths: ownerPaths($('#edit-owner-paths').value) };
+  const repo = selected;
+  const ownerChanged = settings.fileOwner !== (repo.fileOwner || '') || settings.fileOwnerPaths.join(',') !== (repo.fileOwnerPaths || []).join(',');
+  const scriptChanged = settings.script !== (repo.script || '');
+  if (ownerChanged || scriptChanged) {
+    const currentSession = session;
+    $('#settings-dialog').close();
+    const what = [scriptChanged && 'the custom script', ownerChanged && 'file ownership'].filter(Boolean).join(' and ');
+    const authCode = await confirmWithAuthenticator(`Change ${what} for ${repo.url}. It applies to every later deployment, including automatic ones.`);
+    if (!authCode || session !== currentSession) return;
+    settings.authCode = authCode;
+  }
   if (username && password) settings.auth = { type: 'token', username, token: password };
   $('#settings-dialog').close();
   $('#edit-token').value = '';
-  await change(selected, 'PATCH', settings);
+  await change(repo, 'PATCH', settings);
 });
 if (!token) { $('#login-dialog').showModal(); void loadLoginMode(); }
 else { void loadLoginMode(); refresh(); refreshMetrics(); }
-setInterval(refresh, 3000);
+// Poll every second while something is running (live logs), otherwise every 3 seconds.
+let refreshTick = 0;
+setInterval(() => {
+  if (document.hidden) return;
+  refreshTick++;
+  const slowTick = refreshTick % 3 === 0;
+  if (slowTick || repos.some(repo => BUSY.includes(repo.status))) void refresh(slowTick);
+}, 1000);
 setInterval(refreshMetrics, 15000);

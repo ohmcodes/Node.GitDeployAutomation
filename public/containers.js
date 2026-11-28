@@ -1,4 +1,7 @@
+import { createConsoleScreen } from './console.js';
+
 export function createContainerScreen({ $, element, action, api, confirmWithAuthenticator, getSession }) {
+  const { openConsole } = createConsoleScreen({ $ });
   let containerRequest = 0;
   let containerRepoId = null;
 
@@ -20,6 +23,9 @@ export function createContainerScreen({ $, element, action, api, confirmWithAuth
         for (const [label, command] of [['Details / inspect', 'inspect'], ['Logs', 'logs'], ['Processes', 'processes']]) {
           buttons.append(action(label, 'secondary', () => containerOperation(container, command)));
         }
+        const running = container.state === 'running';
+        buttons.append(action('Console', 'secondary', () => startConsole(container, false), !running));
+        buttons.append(action('Root console', 'secondary', () => startConsole(container, true), !running));
         for (const command of ['start', 'stop', 'kill', 'restart', 'pause', 'resume']) {
           const valid = command === 'start' ? ['created', 'exited', 'dead'].includes(container.state) :
             command === 'resume' ? container.state === 'paused' :
@@ -128,6 +134,23 @@ export function createContainerScreen({ $, element, action, api, confirmWithAuth
     }
   }
 
+
+  async function startConsole(container, root) {
+    const repoId = containerRepoId;
+    const currentSession = getSession();
+    const name = container.name || container.id;
+    const authCode = await confirmWithAuthenticator(`Open a ${root ? 'root ' : ''}shell in ${name}. Commands run inside the live container.`);
+    if (!authCode || getSession() !== currentSession || containerRepoId !== repoId || !$('#containers-dialog').open) return;
+    $('#containers-status').textContent = 'Opening console…';
+    try {
+      const { ticket } = await api(`/api/repos/${repoId}/containers/${container.id}/console`, { method: 'POST', body: { authCode, root } });
+      if (getSession() !== currentSession || containerRepoId !== repoId) return;
+      $('#containers-status').textContent = '';
+      openConsole({ ticket, title: `${name}${root ? ' · root' : ''}` });
+    } catch (error) {
+      if (getSession() === currentSession && $('#containers-dialog').open) $('#containers-status').textContent = error.message;
+    }
+  }
 
   function openContainers(repo, name) {
     containerRepoId = repo.id;

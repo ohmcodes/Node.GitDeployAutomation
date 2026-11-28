@@ -2,7 +2,7 @@
 
 ## Security first
 
-Git Deploy is a single-administrator tool. An authenticated session grants the ability to clone repositories, execute custom scripts, build arbitrary Dockerfiles and control the Docker daemon. The Docker socket and the default container's root user give effectively unrestricted access to the host. Only connect trusted repositories and use scripts you have reviewed. A malicious repository or Compose file can compromise the host.
+Git Deploy is a single-administrator tool. An authenticated session grants the ability to clone repositories, run restricted custom scripts in project containers, build arbitrary Dockerfiles and control the Docker daemon. The Docker socket and the default container's root user give effectively unrestricted access to the host. Only connect trusted repositories. Custom scripts are limited to `docker compose exec/run --rm/restart`, `echo` and `sleep`, run without a shell, but a repository's own Compose file and Dockerfiles still run with Docker access. A malicious repository or Compose file can compromise the host.
 
 The HTTP server has no built-in TLS, user accounts, or audit trail. The supplied Compose configuration binds its port to host loopback only. Access it locally, through an SSH tunnel, or through a properly secured HTTPS reverse proxy/VPN with additional access controls and proxy-level rate limiting. Never publish the service port directly to the internet. Before authenticator enrollment, login uses the deployment token alone. After enrollment, login uses an authenticator code alone, without the token. **Both modes are single-factor authentication**, even though an authenticator app is commonly used as a second factor elsewhere. The server issues an eight-hour session stored in browser session storage. Sessions are invalidated on restart, logout, enrollment, or authenticator reset. Five failed login attempts across the instance lock login for 15 minutes; the in-memory limit resets on restart and is not a substitute for proxy rate limiting. Protect the browser and deployment host.
 
@@ -79,6 +79,28 @@ After a successful deployment, **Redeploy** performs a pull and `docker compose 
 
 **View page** reads a literal `DOMAIN` from the repository root `.env`. A bare hostname defaults to HTTPS; specify `http://` explicitly when needed. Literal quoted values and a URL path are supported; interpolation, credentials, query strings, and fragments are not. When no domain is set, the dialog lists running Compose services' published TCP ports as HTTP links using the dashboard's hostname. Verify you select a web service; not every TCP port serves HTTP. Port bindings, firewalls, SSH tunnels, remote Docker daemons, and reverse proxies can make those links unreachable, and a loopback-only binding is accessible only from the Docker host. Configure `DOMAIN` when the publicly reachable address differs.
 
+## File ownership for deployed containers
+
+Git Deploy runs as root in its container, so everything it clones is owned by root. A deployed app that runs as a non-root user (for example the `node` user, UID 1000) and bind-mounts a folder from the clone, such as `./data:/data`, then fails to write to it with `EACCES: permission denied`.
+
+In the repository's settings, set **File owner** (`UID:GID`, for example `1000:1000`) and **Writable folders** (for example `data, storage/uploads`). Before each `docker compose up`, Git Deploy creates any listed folder that is missing and gives it, with everything inside, to that owner. A saved `.env` is also given to the owner straight away and keeps its owner-only `0600` permissions. Find the right IDs with `docker compose exec <service> id`. Changing either setting requires a fresh authenticator code.
+
+Safety rules:
+- Only the listed folders are changed, never the clone root, `.git`, or the rest of the repository. Paths must be relative and cannot contain `..`.
+- The deployment stops if a listed folder contains a tracked Compose file, Dockerfile or `.dockerignore`, since a compromised app could otherwise rewrite the next root-run deployment. List data folders only.
+- Symlinks are never followed: a listed folder that is a symlink is refused, and symlinks inside are re-owned themselves without touching their targets.
+- Ownership changes need Git Deploy to run as root on Linux, as the supplied container does; elsewhere they are skipped.
+
+A named volume (`app-data:/data`) does not need this setting; Docker initializes it from the ownership in the image.
+
+## Container consoles
+
+**More actions → Containers → Console** (or **Root console**) opens an interactive shell in a running container of the project, in the browser. It runs `bash`, or `sh` when the image has no bash, as the container's configured user, or as root (UID 0) for **Root console**. Opening one requires a fresh authenticator code. The browser then receives a single-use ticket that expires after 30 seconds and opens a WebSocket at `/api/console` on the same origin. Opening and closing a console is recorded in the repository's activity, but what you type is not.
+
+A console closes when the shell exits, after 30 minutes without input, or when the session ends (sign-out, expiry, restart or authenticator reset). At most 10 consoles can be open at once. Changes made in a console affect only the live container; the next deployment can recreate it and discard them.
+
+Consoles talk to the Docker Engine API directly. They work with the default local socket (`/var/run/docker.sock`, mounted by the supplied Compose file), `DOCKER_HOST=unix://…`, a Windows named pipe, or plain `tcp://`. They do not work with TLS (`DOCKER_TLS_VERIFY`) or `ssh://` Docker hosts. If you put a reverse proxy in front of Git Deploy, it must forward WebSocket upgrades for `/api/console` and pass the original `Host` header (for nginx, `proxy_set_header Host $host;`), because the console checks that the browser's `Origin` matches it. Shells are ended (Ctrl+C, then `exit`) when a console closes, but a process that ignores this can keep running in the container until it restarts.
+
 ## Removing projects
 
 Removal always deletes the managed clone and credentials. Select the optional cleanup boxes to run `docker compose down`, and optionally `--rmi local` to remove images without custom tags. Compose project names may be shared with other deployments, and images may be used elsewhere; review the target carefully and back up first. Named and anonymous volumes are not removed. If Compose cleanup fails, the repository is retained and its error appears in Activity; cleanup may already have partially completed.
@@ -86,7 +108,7 @@ Removal always deletes the managed clone and credentials. Select the optional cl
 ## Troubleshooting
 
 - **Cannot start:** `DEPLOY_TOKEN` must be at least 16 characters, and the poll interval must be an integer of 10 or more.
-- **Clone fails:** inspect **Activity** for the Git error; check URL, branch, network, and noninteractive credentials. Remove the failed entry and add it again.
-- **Deploy fails:** inspect **Activity** for Git, Compose, or script output. Verify the Compose file, Docker access, project environment files and port availability. Fix the issue and select **Deploy** again.
+- **Clone fails:** open the card's **Activity** log for the Git error; check URL, branch, network, and noninteractive credentials. Remove the failed entry and add it again.
+- **Deploy fails:** open the card's **Activity** log for Git, Compose, or script output. A script rejected as unsafe names the line to fix in **Settings**. Verify the Compose file, Docker access, project environment files and port availability. Fix the issue and select **Deploy** again.
 - **Watching stops:** any failed check or deployment requires a successful manual deploy to resume polling. If the branch was force-pushed, resolve the checkout manually rather than automatically discarding local changes.
 - **Unexpected service state:** `docker compose ps` and logs are snapshots taken during deployment, not continuous health checks. Inspect the managed project with Docker directly.

